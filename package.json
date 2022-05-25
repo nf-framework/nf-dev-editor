@@ -1,0 +1,11 @@
+{
+    "name": "@nfjs/dev-editor",
+    "version": "1.0.0",
+    "type": "module",
+    "repository": "",
+    "license": "MIT",
+    "author": "The NF Project Authors",
+    "dependencies": {
+        "@nfjs/back": "^1.0.0"
+    }
+}
