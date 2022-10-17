@@ -2,24 +2,19 @@ import { PlElement, html, css } from "polylib";
 import '@plcmp/pl-grid';
 import '@plcmp/pl-grid/pl-grid-column';
 
-import { findRootElement } from "../lib/selectors/polylib-component.js";
 import { findByXpath, getModelByDom, getXPath } from "../lib/common.js";
 import drndr from "../lib/drndr.js";
-import { domSelector } from "../lib/domselector";
-import {AddElementCommand, MoveElementCommand} from "../lib/commands.js";
+import { AddElementCommand, MoveElementCommand } from "../lib/commands.js";
 
 class TreeList extends PlElement {
-	static get properties() {
-		return {
-			inspect: { type: Object, observer: '_inspectedChange' },
-			data: { type: Array },
-			selected: { type: String, observer: '_selectedObserver' },
-			_selectedNode: { type: Object }
-		}
+	static properties = {
+		inspect: { type: Object, observer: '_inspectedChange' },
+		data: { type: Array },
+		selected: { type: String, observer: '_selectedObserver' },
+		_selectedNode: { type: Object }
 	}
 
-	static get css() {
-		return css`
+	static css = css`
 			:host {
 				display: block;
 				width: 100%;
@@ -31,17 +26,18 @@ class TreeList extends PlElement {
 				--pl-grid-cell-min-height: 24px;
 			}
     	`;
-	}
 
-	static get template() {
-		return html`
-			<pl-grid tree data="[[data]]" selected="{{_selectedNode}}" on-row-click="[[onSelect]]" key-field="id" pkey-field="parent_id">
-				<pl-grid-column resizable sortable width="300" field="name" header="Структура">
-					<template><div draggable="true"><span>[[row.name]]</span></div></template>
-				</pl-grid-column>
-			</pl-grid>
-		`;
-	}
+	static template = html`
+		<pl-grid tree data="{{data}}" selected="{{_selectedNode}}" on-row-click="[[onSelect]]" key-field="id"
+			pkey-field="parent_id">
+			<pl-grid-column resizable sortable width="300" field="name" header="Структура">
+				<template>
+					<div draggable="true"><span>[[row.name]]</span></div>
+				</template>
+			</pl-grid-column>
+		</pl-grid>
+	`;
+
 	constructor() {
 		super();
 		drndr.listen(this, 'dev/element', this.over, this.leave, this.drop);
@@ -104,7 +100,10 @@ class TreeList extends PlElement {
 		}
 	}
 	_inspectedChange(inspect) {
-		this.data = this.fwt.buildTree(inspect);
+		setTimeout(() => {
+			let data = this.fwt.buildTree(inspect);
+			this.data = data;
+		}, 300)
 	}
 	onFormUpdate() {
 		this._inspectedChange(this.inspect);
@@ -126,5 +125,7 @@ class TreeList extends PlElement {
 		}))
 	}
 }
+
+
 
 customElements.define('pl-tree-list', TreeList);

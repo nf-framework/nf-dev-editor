@@ -1,5 +1,4 @@
 import { PlElement, html, css } from "polylib";
-import "@plcmp/pl-repeat";
 import "@plcmp/pl-input";
 
 import { ChangePropertyCommand } from "../lib/commands";
@@ -41,11 +40,9 @@ class PropsPanel extends PlElement {
 
     static get template() {
         return html`
-            <pl-repeat items="{{data}}">
-                <template>
-                    <pl-input label="[[item.name]]" value="{{item.value}}" title="[[_getTitle(item.currentValue)]]"></pl-input>
-                </template>
-            </pl-repeat>
+            <template d:repeat="{{data}}">
+                <pl-input label="[[item.name]]" value="{{item.value}}" title="[[_getTitle(item.currentValue)]]"></pl-input>
+            </template>
         `;
     }
 

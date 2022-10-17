@@ -1,6 +1,5 @@
 import { PlElement, html } from "polylib";
-import "@plcmp/pl-repeat";
-import "@plcmp/pl-input";
+import "@plcmp/pl-icon-button";
 import "@plcmp/pl-drawer";
 import "@nfjs/front-pl/components/pl-codeeditor.js";
 

@@ -13,8 +13,7 @@ import { findByXpath, getXPath } from "../lib/common.js";
 import {debounce} from "@plcmp/utils";
 
 class EditorMain extends PlElement {
-    static get properties() {
-        return {
+    static properties = {
             opened: { type: Boolean },
             editForm: { type: Object },
             tree: { type: Array, value: () => [] },
@@ -24,11 +23,9 @@ class EditorMain extends PlElement {
             tplRoot: { type: Object },
             selectedPath: { type: String },
             scriptsDelta: { type: Array, value: () => ([]) }
-        }
     }
 
-    static get css() {
-        return css`
+    static css = css`
             :host {
                 top: 0;
                 left: 0;
@@ -59,25 +56,22 @@ class EditorMain extends PlElement {
                 background: var(--white);         
             }
         `;
-    }
 
-    static get template() {
-        return html`
-            <div id="left-panel">
-                <pl-flex-layout>
-                    <pl-button on-click="[[select]]" label="select"></pl-button>
-                    <pl-button on-click="[[save]]" label="save"></pl-button>
-                    <pl-button on-click="[[scripts]]" label="scripts"></pl-button>
-                </pl-flex-layout>
-                <pl-tree-list inspect="[[tplRoot]]" selected="[[selectedPath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
-                <pl-component-list></pl-component-list>
-            </div>
-            <div id="right-panel">
-                <pl-props-panel tpl-root="[[tplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" selected="[[selectedPath]]" fwt="[[fwt]]"></pl-props-panel>
-            </div>
-            <pl-scripts-editor delta="{{scriptsDelta}}" fwt="[[fwt]]" form="[[editForm]]" id="scriptsEditor"></pl-scripts-editor>
-        `;
-    }
+    static template = html`
+        <div id="left-panel">
+            <pl-flex-layout>
+                <pl-button on-click="[[select]]" label="select"></pl-button>
+                <pl-button on-click="[[save]]" label="save"></pl-button>
+                <pl-button on-click="[[scripts]]" label="scripts"></pl-button>
+            </pl-flex-layout>
+            <pl-tree-list inspect="[[tplRoot]]" selected="[[selectedPath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
+            <pl-component-list></pl-component-list>
+        </div>
+        <div id="right-panel">
+            <pl-props-panel tpl-root="[[tplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" selected="[[selectedPath]]" fwt="[[fwt]]"></pl-props-panel>
+        </div>
+        <pl-scripts-editor delta="{{scriptsDelta}}" fwt="[[fwt]]" form="[[editForm]]" id="scriptsEditor"></pl-scripts-editor>
+    `;
 
     constructor() {
         super();
@@ -125,7 +119,9 @@ class EditorMain extends PlElement {
         this.selectedPath = e.detail.path;
         if (this.selected) this.selected.draggable = false;
         this.selected = findByXpath(this.editForm.root, this.selectedPath);
-        this.selected.draggable = true;
+        if(this.selected) {
+            this.selected.draggable = true;
+        }
     }
 
     scripts() {
