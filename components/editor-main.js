@@ -52,7 +52,7 @@ class EditorMain extends PlElement {
                 box-sizing: border-box;
                 overflow: auto;
                 padding: 8px;
-                border-left: 1px solid var(--grey-light);
+                border-left: 1px solid var(--pl-grey-light);
                 background: var(--white);         
             }
         `;

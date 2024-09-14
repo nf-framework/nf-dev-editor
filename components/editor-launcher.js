@@ -12,7 +12,7 @@ class EditorLauncher extends PlElement {
           right: 16px;
           padding: 4px;
           cursor: pointer;
-          border: 1px solid var(--grey-light);
+          border: 1px solid var(--pl-grey-light);
           background-color: white;
         }
     `;
