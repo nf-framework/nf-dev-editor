@@ -1,7 +1,7 @@
 import { html, css, PlElement } from "polylib";
 import "@plcmp/pl-icon";
 
-import '@editor/lib/shortcut.js';
+import "../lib/shortcut.js";
 
 class EditorLauncher extends PlElement {
     static template = html`<pl-icon iconset="pl-default" icon="pencil" size="16"></pl-icon>`;

@@ -8,11 +8,12 @@ import { AddElementCommand, MoveElementCommand } from "../lib/commands.js";
 
 class TreeList extends PlElement {
 	static properties = {
-		inspect: { type: Object, observer: '_inspectedChange' },
-		data: { type: Array },
-		selected: { type: String, observer: '_selectedObserver' },
-		_selectedNode: { type: Object }
-	}
+			inspect: { type: Object, observer: '_inspectedChange' },
+			rootLabel: { type: String, observer: '_rootLabelChanged' },
+			data: { type: Array },
+			selected: { type: String, observer: '_selectedObserver' },
+			_selectedNode: { type: Object }
+		}
 
 	static css = css`
 			:host {
@@ -51,7 +52,7 @@ class TreeList extends PlElement {
 			let node = e.composedPath()[0].closest('.cell');
 			let model = getModelByDom(node);
 			if (model) {
-				let path = getXPath(model.row.node)
+				let path = model.row.path || getXPath(model.row.node);
 				//TODO: create image for drug preview
 				let img = document.createElement('img');
 				e.dataTransfer.setDragImage(img, 0, 0)
@@ -67,7 +68,7 @@ class TreeList extends PlElement {
 			let model = getModelByDom(node);
 			if (model) {
 				//domSelector.drawSelector(model.row.target);
-				let path = getXPath(model.row.node)
+				let path = model.row.path || getXPath(model.row.node);
 				this.dispatchEvent(new CustomEvent('highlight', { detail: { path, position: e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in') } }));
 				e.preventDefault();
 			};
@@ -82,14 +83,14 @@ class TreeList extends PlElement {
 			let model = getModelByDom(node);
 			let move = e.dataTransfer.getData('dev/move');
 			let element = e.dataTransfer.getData('dev/element');
-			if (model) {
-				//domSelector.drawSelector(model.row.target);
-				let path = getXPath(model.row.node)
-				let cmd = {
-					position: e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in'),
-					path,
-					element
-				}
+				if (model) {
+					//domSelector.drawSelector(model.row.target);
+					let path = model.row.path || getXPath(model.row.node);
+					let cmd = {
+						position: e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in'),
+						path,
+						element
+					}
 				if (move) {
 					cmd.element = move;
 					dispatchEvent(new CustomEvent('command', { detail: new MoveElementCommand(cmd) }));
@@ -101,23 +102,31 @@ class TreeList extends PlElement {
 	}
 	_inspectedChange(inspect) {
 		setTimeout(() => {
-			let data = this.fwt.buildTree(inspect);
+			if (!inspect) {
+				this.data = [];
+				return;
+			}
+			let data = this.fwt.buildTree(inspect, this.rootLabel);
 			this.data = data;
 		}, 300)
+	}
+	_rootLabelChanged() {
+		this._inspectedChange(this.inspect);
 	}
 	onFormUpdate() {
 		this._inspectedChange(this.inspect);
 	}
 	_selectedObserver(val) {
-		if (!val) return;
+		if (!val || !this.inspect || !Array.isArray(this.data)) return;
 		let node = findByXpath(this.inspect, val, true);
 		this._selectedNode = null;
-		this._selectedNode = this.data.find(x => x.node === node);
+		this._selectedNode = this.data.find(x => x.path === val) || (node ? this.data.find(x => x.node === node) : null);
 	}
 
 	onSelect(item) {
-		let node = item.detail.model.node;
-		let path = getXPath(node)
+		let model = item.detail.model;
+		let node = model.node;
+		let path = model.path || getXPath(node)
 		window.dispatchEvent(new CustomEvent('select-component', {
 			detail: {
 				path

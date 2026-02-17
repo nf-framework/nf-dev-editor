@@ -10,55 +10,237 @@ const meta = {
     },
 };
 
-const templateRegexp = /(template[(){\s=]+(?:return)?\s+?html`)(?<tpl>.*?)`/gms;
-const frmBodyRegexp = /export\s+default\s+class\s+(\w+)\s+extends\s+PlForm\s+(?<body>{.*})/ms;
+const frmBodyRegexp = /export\s+default\s+class\s+\w+\s+extends\s+[^{]+\s+(?<body>{[\s\S]*})/m;
+
+async function resolveFormFile(formName) {
+    const formPath = String(formName || '').replace(/\./g, '/');
+    let file = await extension.getFiles(`forms/${formPath}.js`);
+    if (Array.isArray(file)) file = file[0];
+    if (!file) {
+        throw new Error(`Форма не найдена: ${formName}`);
+    }
+    return file;
+}
+
+async function getFileSignature(file) {
+    const stat = await fs.stat(file);
+    return `${stat.size}:${Math.floor(stat.mtimeMs)}`;
+}
+
+function escapeTemplateLiteral(source = '') {
+    return String(source)
+        .replace(/`/g, '\\`')
+        .replace(/\$\{/g, '\\${');
+}
+
+function extractStaticTaggedBlock(content, { property, tag }) {
+    const staticPropPattern = new RegExp(`static\\s+${property}\\s*=\\s*${tag}\\s*\`([\\s\\S]*?)\``, 'm');
+    let match = content.match(staticPropPattern);
+    if (match?.[1]) return match[1];
+
+    const staticGetterPattern = new RegExp(`static\\s+get\\s+${property}\\s*\\(\\)\\s*\\{[\\s\\S]*?return\\s+${tag}\\s*\`([\\s\\S]*?)\``, 'm');
+    match = content.match(staticGetterPattern);
+    if (match?.[1]) return match[1];
+
+    return '';
+}
+
+function replaceStaticTaggedBlock(content, { property, tag, value }) {
+    if (typeof value !== 'string') return content;
+    const body = escapeTemplateLiteral(value);
+
+    const staticPropPattern = new RegExp(`(static\\s+${property}\\s*=\\s*${tag}\\s*\`)([\\s\\S]*?)(\`)`, 'm');
+    if (staticPropPattern.test(content)) {
+        return content.replace(staticPropPattern, (_full, prefix, _current, suffix) => `${prefix}${body}${suffix}`);
+    }
+
+    const staticGetterPattern = new RegExp(`(static\\s+get\\s+${property}\\s*\\(\\)\\s*\\{[\\s\\S]*?return\\s+${tag}\\s*\`)([\\s\\S]*?)(\`\\s*;?[\\s\\S]*?\\})`, 'm');
+    if (staticGetterPattern.test(content)) {
+        return content.replace(staticGetterPattern, (_full, prefix, _current, suffix) => `${prefix}${body}${suffix}`);
+    }
+
+    return content;
+}
+
+function appendMethodToClass(content, methodText) {
+    const matches = content.match(frmBodyRegexp);
+    if (!matches?.groups?.body) return content;
+    const updatedBody = matches.groups.body.replace(/\}\s*$/, `\n\t${methodText}\n}`);
+    return content.replace(matches.groups.body, updatedBody);
+}
+
+function templateTagStub(strings, ...values) {
+    if (!Array.isArray(strings)) return '';
+    let out = '';
+    for (let i = 0; i < strings.length; i++) {
+        out += strings[i] ?? '';
+        if (i < values.length) out += values[i] ?? '';
+    }
+    return out;
+}
+
+function buildClassFromBody(body, label = 'form') {
+    try {
+        return new Function(
+            'html',
+            'css',
+            'unsafeCSS',
+            `return class sourceClass ${body}`
+        )(templateTagStub, templateTagStub, value => value);
+    } catch (err) {
+        throw new Error(`Не удалось разобрать класс формы ${label}: ${err?.message || err}`);
+    }
+}
+
+function extractScripts(content) {
+    const matches = content.match(frmBodyRegexp);
+    if (!matches?.groups?.body) return '';
+    try {
+        const sourceClass = buildClassFromBody(matches.groups.body, 'extractScripts');
+        return Object
+            .getOwnPropertyNames(sourceClass.prototype)
+            .filter(name => name !== 'constructor' && typeof sourceClass.prototype[name] === 'function')
+            .map(name => sourceClass.prototype[name].toString())
+            .join('\n');
+    } catch (_err) {
+        return '';
+    }
+}
+
+function applyScriptsDelta(content, scriptsDelta, formName) {
+    const matches = content.match(frmBodyRegexp);
+    if (!matches?.groups?.body) {
+        throw new Error(`Не удалось разобрать класс формы для scriptsDelta: ${formName}`);
+    }
+
+    const originalClass = buildClassFromBody(matches.groups.body, formName);
+    const methodSources = new Map();
+    Object
+        .getOwnPropertyNames(originalClass.prototype)
+        .filter(name => name !== 'constructor')
+        .forEach(name => {
+            const fn = originalClass.prototype[name];
+            if (typeof fn === 'function') methodSources.set(name, fn.toString());
+        });
+
+    const normalizeMethod = source => String(source ?? '').trim().replace(/\n/g, '\n\t');
+    const getMethod = name => (name ? methodSources.get(name) : null);
+    const hasMethod = source => typeof source === 'string' && source.length > 0 && content.includes(source);
+
+    for (const delta of scriptsDelta) {
+        if (!delta?.action) continue;
+
+        if (delta.action === 'delete') {
+            const source = getMethod(delta.name);
+            if (hasMethod(source)) content = content.replace(source, '');
+            methodSources.delete(delta.name);
+            continue;
+        }
+
+        if (delta.action === 'add') {
+            const source = normalizeMethod(delta.newFunc);
+            if (!source) continue;
+
+            const nearName = delta.oldFunc || delta.nearestFunc;
+            const nearSource = getMethod(nearName);
+
+            if (delta.position === 'before' && hasMethod(nearSource)) {
+                content = content.replace(nearSource, `${source}\n\n\t${nearSource}`);
+            } else if (delta.position === 'after' && hasMethod(nearSource)) {
+                content = content.replace(nearSource, `${nearSource}\n\n\t${source}`);
+            } else {
+                content = appendMethodToClass(content, source);
+            }
+            methodSources.set(delta.name, source);
+            continue;
+        }
+
+        if (delta.action === 'update') {
+            const source = normalizeMethod(delta.newFunc);
+            if (!source) continue;
+
+            const current = getMethod(delta.name);
+            if (hasMethod(current)) {
+                content = content.replace(current, source);
+            } else {
+                content = appendMethodToClass(content, source);
+            }
+            methodSources.set(delta.name, source);
+        }
+    }
+
+    return content;
+}
 
 async function init() {
     registerLibDir('@editor/lib', __dirname + '/lib');
     registerLibDir('@editor/components', __dirname + '/components');
 
+    web.on('GET', '/@editor/form-source/:form', async context => {
+        const file = await resolveFormFile(context.params.form);
+        const content = await fs.readFile(file, 'utf-8');
+        const signature = await getFileSignature(file);
+
+        context.code(200);
+        context.type('application/json');
+        context.send({
+            ok: true,
+            form: context.params.form,
+            file,
+            signature,
+            source: content,
+            template: extractStaticTaggedBlock(content, { property: 'template', tag: 'html' }),
+            styles: extractStaticTaggedBlock(content, { property: 'css', tag: 'css' }),
+            scripts: extractScripts(content)
+        });
+        context.end();
+    });
+
     web.on('POST', '/@editor/save-form/:form', { middleware: ['json'] }, async context => {
-        let path = context.params.form.replace(/\./g, '/')
-        let file = await extension.getFiles('forms/' + path + '.js');
+        const file = await resolveFormFile(context.params.form);
+        const currentSignature = await getFileSignature(file);
+
+        if (context.body.baseSignature && context.body.baseSignature !== currentSignature) {
+            context.code(409);
+            context.type('application/json');
+            context.send({
+                ok: false,
+                error: 'SOURCE_CHANGED',
+                message: 'Исходный код формы изменился на сервере. Обновите форму и повторите сохранение.',
+                signature: currentSignature
+            });
+            context.end();
+            return;
+        }
+
         let content = await fs.readFile(file, 'utf-8');
 
-        //replace template
-        content = content.replace(templateRegexp, `$1${context.body.tpl}\``);
+        // replace template + css blocks first so visual changes always persist
+        content = replaceStaticTaggedBlock(content, { property: 'template', tag: 'html', value: context.body.tpl });
+        content = replaceStaticTaggedBlock(content, { property: 'css', tag: 'css', value: context.body.styles });
 
-        // generate dynamic class from original file to proper method replacement
-        const matches = content.match(frmBodyRegexp);
-        const originalClass = new Function('class originalClass ' + matches.groups.body + '; return new originalClass')();
-
-        context.body.scriptsDelta.forEach(el => {
-            if (el.action == 'delete') {
-                content = content.replace(originalClass[el.name]?.toString(), '');
-                delete originalClass.constructor.prototype[el.name];
+        const scriptsDelta = Array.isArray(context.body.scriptsDelta) ? context.body.scriptsDelta : [];
+        let scriptsWarning = '';
+        if (scriptsDelta.length > 0) {
+            try {
+                content = applyScriptsDelta(content, scriptsDelta, context.params.form);
+            } catch (err) {
+                scriptsWarning = err?.message || String(err);
+                console.error(`[nf-dev-editor] save-form warning for ${context.params.form}:`, err);
             }
-            if (el.action == 'add') {
-                let added = el.newFunc.replace(/\n/g, '\n\t');
+        }
 
-                if (el.position == 'none') {
-                    content = content.replace(/}[^}]*$/s, '\t' + added + '\n}');
-                }
+        await fs.writeFile(file, content, 'utf-8');
+        const nextSignature = await getFileSignature(file);
 
-                if (el.position == 'before') {
-                    content = content.replace(originalClass[el.oldFunc]?.toString(), added + '\n\n\t' + originalClass[el.oldFunc]?.toString());
-                }
-
-                if (el.position == 'after') {
-                    content = content.replace(originalClass[el.oldFunc]?.toString(), originalClass[el.oldFunc]?.toString() + '\n\n\t' + added);
-                }
-
-                originalClass[el.name] = added;
-            }
-
-            if (el.action == 'update') {
-                content = content.replace(originalClass[el.name]?.toString(), el.newFunc.replace(/\n/g, '\n\t'));
-                originalClass[el.name] = el.newFunc.replace(/\n/g, '\n\t');
-            }
+        context.code(200);
+        context.type('application/json');
+        context.send({
+            ok: true,
+            signature: nextSignature,
+            warning: scriptsWarning || null
         });
-        await fs.writeFile(file, content, 'utf-8')
-        context.end('ok');
+        context.end();
     });
 }
 
@@ -66,4 +248,3 @@ export {
     meta,
     init,
 };
-

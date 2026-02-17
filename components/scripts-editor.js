@@ -8,6 +8,7 @@ class PlScriptsEditor extends PlElement {
         return {
             fwt: { type: Object },
             form: { type: Object, observer: '_formObserver' },
+            sourceScript: { type: String, observer: '_sourceScriptObserver' },
             script: { type: String, observer: '_scriptObserver' },
             delta: { type: Array, value: () => ([]) },
             errorMessage: { type: String }
@@ -25,18 +26,39 @@ class PlScriptsEditor extends PlElement {
         `;
     }
 
+    constructor() {
+        super();
+        this._syncingScript = false;
+    }
+
     open() {
         this.$.drawer.opened = !this.$.drawer.opened;
     }
 
+    _setScriptValue(value) {
+        this._syncingScript = true;
+        this.script = value || '';
+        if (this.$.codeeditor) this.$.codeeditor.value = this.script;
+        this._syncingScript = false;
+    }
+
     _formObserver(val) {
         if (val) {
-            this.script = this.fwt.getFunctions(this.form).map(x => x.text).join('\n');
-            this.$.codeeditor.value = this.script;
+            const source = this.sourceScript || this.fwt.getFunctions(this.form).map(x => x.text).join('\n');
+            this._setScriptValue(source);
+            this.delta = [];
+        }
+    }
+
+    _sourceScriptObserver(val) {
+        if (this.form && typeof val === 'string') {
+            this._setScriptValue(val);
+            this.delta = [];
         }
     }
 
     _scriptObserver(val) {
+        if (this._syncingScript || !this.form) return;
         try {
             this.errorMessage = '';
 
