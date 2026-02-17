@@ -4,10 +4,13 @@ import "@plcmp/pl-combobox";
 import "@plcmp/pl-checkbox";
 import "@plcmp/pl-textarea";
 import "@plcmp/pl-button";
-import "./pl-button-group.js";
+import "@plcmp/pl-radio-group";
+import "@plcmp/pl-radio-button";
+import "@plcmp/pl-icon";
+import "@plcmp/pl-dom-if";
 
 import { ChangePropertyCommand, ChangeAttributeCommand, ChangeTextNodeCommand } from "../lib/commands.js";
-import {findByXpath} from "../lib/common.js";
+import { buildXPathCandidates, findByXpath, findByXpathWithFallback } from "../lib/common.js";
 import Css from "../lib/css.js";
 
 class PropsPanel extends PlElement {
@@ -16,17 +19,22 @@ class PropsPanel extends PlElement {
             data: { type: Array, value: () => [],  observer: '_dataObserver' },
             groups: { type: Array, value: () => [], observer: '_groupsObserver' },
             bindItems: { type: Array, value: () => [], observer: '_bindItemsObserver' },
-            styleItems: { type: Array, value: () => [], observer: '_styleItemsObserver' },
-            styleRules: { type: Array, value: () => [] },
-            columnItems: { type: Array, value: () => [] },
             selectedTag: { type: String, value: '' },
             selected: { type: String, observer: '_selectedChange' },
+            selectedSourcePath: { type: String, value: '', observer: '_selectedSourcePathChange' },
             fwt: { type: Object },
             domRoot: { type: Object, observer: '_rootsChanged' },
             tplRoot: { type: Object, observer: '_rootsChanged' },
             sourceTplRoot: { type: Object, observer: '_rootsChanged' },
             panelTitle: { type: String, value: 'Свойства компонента' },
-            panelDescription: { type: String, value: 'Выберите элемент на форме для редактирования свойств.' }
+            panelDescription: { type: String, value: 'Выберите элемент на форме для редактирования свойств.' },
+            activeTab: { type: String, value: 'properties' },
+            hasSelectedElement: { type: Boolean, value: false },
+            classValue: { type: String, value: '', observer: '_classValueObserver' },
+            classDraft: { type: String, value: '' },
+            classTokens: { type: Array, value: () => [] },
+            cssRuleItems: { type: Array, value: () => [] },
+            eventItems: { type: Array, value: () => [], observer: '_eventItemsObserver' }
         }
     }
 
@@ -62,6 +70,17 @@ class PropsPanel extends PlElement {
                 margin-top: 4px;
                 font: var(--pl-text-font);
                 color: var(--pl-grey-darkest);
+            }
+
+            .panel-tabs {
+                margin-top: 8px;
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+
+            .tab-wrap {
+                min-width: 0;
             }
 
             .group {
@@ -138,12 +157,18 @@ class PropsPanel extends PlElement {
             }
 
             pl-combobox {
-                --pl-content-width: 100%;
+                width: 100%;
+                min-width: 0;
             }
 
             pl-textarea {
                 --pl-content-width: 100%;
                 --pl-textarea-content-height: 72px;
+            }
+
+            pl-radio-group {
+                width: 100%;
+                --pl-content-width: 100%;
             }
 
             .meta-row {
@@ -182,6 +207,61 @@ class PropsPanel extends PlElement {
                 word-break: break-word;
                 line-height: 1.3;
             }
+
+            .class-token-list {
+                margin-top: 8px;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+
+            .class-token {
+                display: inline-flex;
+                align-items: center;
+                min-height: 24px;
+                padding: 0 4px 0 8px;
+                border: 1px solid var(--pl-grey-light);
+                border-radius: 11px;
+                background: var(--pl-grey-lightest);
+                font: var(--pl-text-font);
+                color: var(--pl-grey-darkest);
+                line-height: 1;
+                gap: 4px;
+            }
+
+            .class-token-label {
+                cursor: pointer;
+                user-select: none;
+            }
+
+            .class-editor-row {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            .class-editor-row pl-input {
+                flex: 1;
+            }
+
+            .class-token-remove {
+                min-width: 20px;
+                --pl-base-size: 20px;
+            }
+
+            .event-row-head {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 8px;
+                margin-bottom: 6px;
+            }
+
+            .event-row-controls {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
         `;
     }
 
@@ -190,156 +270,220 @@ class PropsPanel extends PlElement {
             <div class="panel-head">
                 <div class="panel-title">[[panelTitle]]</div>
                 <div class="panel-description">[[panelDescription]]</div>
+                <div class="panel-tabs">
+                    <div class="tab-wrap">
+                        <pl-button label="Свойства" data-tab="properties" variant="[[_tabVariant(activeTab,'properties')]]" on-click="[[onTabClick]]"></pl-button>
+                    </div>
+                    <div class="tab-wrap">
+                        <pl-button label="Классы" data-tab="classes" variant="[[_tabVariant(activeTab,'classes')]]" on-click="[[onTabClick]]"></pl-button>
+                    </div>
+                    <div class="tab-wrap">
+                        <pl-button label="События" data-tab="events" variant="[[_tabVariant(activeTab,'events')]]" on-click="[[onTabClick]]"></pl-button>
+                    </div>
+                </div>
             </div>
 
-            <template d:repeat="{{groups}}">
-                <section class="group">
-                    <div class="group-head">
-                        <div class="group-title">[[item.title]]</div>
-                        <div class="group-description" hidden$="[[!item.description]]">[[item.description]]</div>
-                    </div>
+            <div hidden$="[[!_isTab(activeTab,'properties')]]">
+                <template d:repeat="{{groups}}">
+                    <section class="group">
+                        <div class="group-head">
+                            <div class="group-title">[[item.title]]</div>
+                            <div class="group-description" hidden$="[[!item.description]]">[[item.description]]</div>
+                        </div>
 
-                    <div class="group-body">
-                        <template d:repeat="{{item.items}}">
-                            <div class="prop-item">
-                                <div class="prop-meta">
-                                    <div class="prop-label">[[item.label]]</div>
-                                    <div class="prop-name">[[item.name]]</div>
+                        <div class="group-body">
+                            <template d:repeat="{{item.items}}">
+                                <div class="prop-item">
+                                    <div class="prop-meta">
+                                        <div class="prop-label">[[item.label]]</div>
+                                        <div class="prop-name">[[item.name]]</div>
+                                    </div>
+                                    <div class="prop-help" hidden$="[[!item.description]]">[[item.description]]</div>
+
+                                    <pl-dom-if if="[[_isEditor(item,'text')]]" restamp>
+                                        <template>
+                                            <pl-input
+                                                value="{{item.value}}"
+                                                placeholder="[[item.placeholder]]"
+                                                title="[[_getTitle(item.currentValue)]]"
+                                                disabled$="[[item.readonly]]"
+                                                stretch></pl-input>
+                                        </template>
+                                    </pl-dom-if>
+
+                                    <pl-dom-if if="[[_isEditor(item,'number')]]" restamp>
+                                        <template>
+                                            <pl-input
+                                                value="{{item.value}}"
+                                                type="number"
+                                                placeholder="[[item.placeholder]]"
+                                                title="[[_getTitle(item.currentValue)]]"
+                                                disabled$="[[item.readonly]]"
+                                                stretch></pl-input>
+                                        </template>
+                                    </pl-dom-if>
+
+                                    <pl-dom-if if="[[_isEditor(item,'textarea')]]" restamp>
+                                        <template>
+                                            <pl-textarea
+                                                value="{{item.value}}"
+                                                placeholder="[[item.placeholder]]"
+                                                title="[[_getTitle(item.currentValue)]]"
+                                                disabled$="[[item.readonly]]"
+                                                hide-resizer
+                                                stretch></pl-textarea>
+                                        </template>
+                                    </pl-dom-if>
+
+                                    <pl-dom-if if="[[_isEditor(item,'select')]]" restamp>
+                                        <template>
+                                            <pl-combobox
+                                                data="[[item.options]]"
+                                                text-property="text"
+                                                value-property="value"
+                                                value="{{item.value}}"
+                                                disabled$="[[item.readonly]]"
+                                                stretch></pl-combobox>
+                                        </template>
+                                    </pl-dom-if>
+
+                                    <pl-dom-if if="[[_isEditor(item,'icon-group')]]" restamp>
+                                        <template>
+                                            <pl-radio-group
+                                                selected="{{item.value}}"
+                                                disabled$="[[item.readonly]]">
+                                                <template d:repeat="{{item.iconOptions}}" d:as="opt">
+                                                    <pl-radio-button name="[[opt.value]]" label="[[opt.text]]" title="[[opt.title]]"></pl-radio-button>
+                                                </template>
+                                            </pl-radio-group>
+                                        </template>
+                                    </pl-dom-if>
+
+                                    <pl-dom-if if="[[_isEditor(item,'boolean')]]" restamp>
+                                        <template>
+                                            <pl-checkbox
+                                                checked="{{item.value}}"
+                                                caption="Включено"
+                                                disabled$="[[item.readonly]]"></pl-checkbox>
+                                        </template>
+                                    </pl-dom-if>
                                 </div>
-                                <div class="prop-help" hidden$="[[!item.description]]">[[item.description]]</div>
+                            </template>
+                        </div>
+                    </section>
+                </template>
 
+                <section class="group" hidden$="[[_isEmpty(bindItems)]]">
+                    <div class="group-head">
+                        <div class="group-title">Бинды</div>
+                        <div class="group-description">Атрибуты и текст выбранного элемента. Можно редактировать bind-выражения и обычный текст.</div>
+                    </div>
+                    <div class="group-body">
+                        <template d:repeat="{{bindItems}}">
+                            <div class="meta-row">
+                                <div class="meta-row-head">
+                                    <div class="meta-row-name">[[item.name]]</div>
+                                    <div class="meta-row-kind">[[item.kind]]</div>
+                                </div>
                                 <pl-input
-                                    hidden$="[[!_isEditor(item,'text')]]"
+                                    hidden$="[[_isLongText(item.value)]]"
                                     value="{{item.value}}"
-                                    placeholder="[[item.placeholder]]"
-                                    title="[[_getTitle(item.currentValue)]]"
-                                    disabled$="[[item.readonly]]"
                                     stretch></pl-input>
-
-                                <pl-input
-                                    hidden$="[[!_isEditor(item,'number')]]"
-                                    value="{{item.value}}"
-                                    type="number"
-                                    placeholder="[[item.placeholder]]"
-                                    title="[[_getTitle(item.currentValue)]]"
-                                    disabled$="[[item.readonly]]"
-                                    stretch></pl-input>
-
                                 <pl-textarea
-                                    hidden$="[[!_isEditor(item,'textarea')]]"
+                                    hidden$="[[!_isLongText(item.value)]]"
                                     value="{{item.value}}"
-                                    placeholder="[[item.placeholder]]"
-                                    title="[[_getTitle(item.currentValue)]]"
-                                    disabled$="[[item.readonly]]"
                                     hide-resizer
                                     stretch></pl-textarea>
-
-                                <pl-combobox
-                                    hidden$="[[!_isEditor(item,'select')]]"
-                                    data="[[item.options]]"
-                                    text-property="text"
-                                    value-property="value"
-                                    value="{{item.value}}"
-                                    disabled$="[[item.readonly]]"
-                                    stretch></pl-combobox>
-
-                                <pl-button-group
-                                    hidden$="[[!_isEditor(item,'icon-group')]]"
-                                    items="[[item.options]]"
-                                    value="{{item.value}}"
-                                    disabled$="[[item.readonly]]"></pl-button-group>
-
-                                <pl-checkbox
-                                    hidden$="[[!_isEditor(item,'boolean')]]"
-                                    checked="{{item.value}}"
-                                    caption="Включено"
-                                    disabled$="[[item.readonly]]"></pl-checkbox>
                             </div>
                         </template>
                     </div>
                 </section>
-            </template>
+            </div>
 
-            <section class="group" hidden$="[[_isEmpty(bindItems)]]">
-                <div class="group-head">
-                    <div class="group-title">Бинды</div>
-                    <div class="group-description">Атрибуты и текст выбранного элемента. Можно редактировать bind-выражения и обычный текст.</div>
-                </div>
-                <div class="group-body">
-                    <template d:repeat="{{bindItems}}">
-                        <div class="meta-row">
-                            <div class="meta-row-head">
-                                <div class="meta-row-name">[[item.name]]</div>
-                                <div class="meta-row-kind">[[item.kind]]</div>
+            <div hidden$="[[!_isTab(activeTab,'classes')]]">
+                <section class="group" hidden$="[[!hasSelectedElement]]">
+                    <div class="group-head">
+                        <div class="group-title">Классы</div>
+                        <div class="group-description">Классы элемента. Изменения применяются сразу в рантайме.</div>
+                    </div>
+                    <div class="group-body">
+                        <div class="prop-item">
+                            <div class="prop-meta">
+                                <div class="prop-label">Class</div>
+                                <div class="prop-name">class</div>
                             </div>
                             <pl-input
-                                hidden$="[[_isLongText(item.value)]]"
-                                value="{{item.value}}"
+                                value="{{classValue}}"
+                                placeholder="Например: card highlighted"
                                 stretch></pl-input>
-                            <pl-textarea
-                                hidden$="[[!_isLongText(item.value)]]"
-                                value="{{item.value}}"
-                                hide-resizer
-                                stretch></pl-textarea>
-                        </div>
-                    </template>
-                </div>
-            </section>
-
-            <section class="group" hidden$="[[_isEmpty(columnItems)]]">
-                <div class="group-head">
-                    <div class="group-title">Колонки грида</div>
-                    <div class="group-description">Выберите колонку для детальной настройки свойств.</div>
-                </div>
-                <div class="group-body">
-                    <template d:repeat="{{columnItems}}">
-                        <div class="meta-row">
-                            <pl-button variant="link" label="[[item.label]]" data-path$="[[item.path]]" on-click="[[onColumnSelect]]"></pl-button>
-                        </div>
-                    </template>
-                </div>
-            </section>
-
-            <section class="group" hidden$="[[_isEmpty(styleItems)]]">
-                <div class="group-head">
-                    <div class="group-title">Стили элемента</div>
-                    <div class="group-description">Редактирование inline-стилей выбранного элемента (style="...").</div>
-                </div>
-                <div class="group-body">
-                    <template d:repeat="{{styleItems}}">
-                        <div class="meta-row">
-                            <div class="meta-row-head">
-                                <div class="meta-row-name">[[item.name]]</div>
+                            <div class="class-editor-row">
+                                <pl-input value="{{classDraft}}" placeholder="Добавить класс" stretch></pl-input>
+                                <pl-button variant="ghost" label="+класс" on-click="[[onAddClassTokenClick]]"></pl-button>
                             </div>
-                            <pl-input value="{{item.value}}" stretch></pl-input>
-                        </div>
-                    </template>
-                </div>
-            </section>
-
-            <section class="group" hidden$="[[_isEmpty(styleRules)]]">
-                <div class="group-head">
-                    <div class="group-title">CSS правила</div>
-                    <div class="group-description">Селекторы, которые совпали с элементом.</div>
-                </div>
-                <div class="group-body">
-                    <template d:repeat="{{styleRules}}">
-                        <div class="meta-row">
-                            <div class="meta-row-head">
-                                <div class="meta-row-name">[[item.selector]]</div>
+                            <div class="class-token-list" hidden$="[[_isEmpty(classTokens)]]">
+                                <template d:repeat="{{classTokens}}">
+                                    <span class="class-token">
+                                        <span class="class-token-label" data-token$="[[item]]" on-click="[[onClassTokenClick]]">[[item]]</span>
+                                        <pl-button class="class-token-remove" variant="link" label="×" data-token$="[[item]]" on-click="[[onRemoveClassTokenClick]]"></pl-button>
+                                    </span>
+                                </template>
                             </div>
-                            <div class="meta-row-value">[[item.declarations]]</div>
                         </div>
-                    </template>
-                </div>
-            </section>
+                    </div>
+                </section>
+
+                <section class="group" hidden$="[[_isEmpty(cssRuleItems)]]">
+                    <div class="group-head">
+                        <div class="group-title">Применённые CSS-правила</div>
+                        <div class="group-description">Селекторы, которые реально матчятся для выбранного элемента.</div>
+                    </div>
+                    <div class="group-body">
+                        <template d:repeat="{{cssRuleItems}}">
+                            <div class="meta-row">
+                                <div class="meta-row-head">
+                                    <div class="meta-row-name">[[item.selector]]</div>
+                                    <div class="meta-row-kind">[[item.origin]]</div>
+                                </div>
+                                <div class="meta-row-value">[[item.declarations]]</div>
+                            </div>
+                        </template>
+                    </div>
+                </section>
+            </div>
+
+            <div hidden$="[[!_isTab(activeTab,'events')]]">
+                <section class="group" hidden$="[[!hasSelectedElement]]">
+                    <div class="group-head">
+                        <div class="group-title">События</div>
+                        <div class="group-description">Обработчики событий вида <code>on-*</code> у выбранного элемента.</div>
+                    </div>
+                    <div class="group-body">
+                        <template d:repeat="{{eventItems}}">
+                            <div class="prop-item">
+                                <div class="event-row-head">
+                                    <div class="prop-label">[[item.label]]</div>
+                                    <div class="event-row-controls">
+                                        <div class="prop-name">[[item.name]]</div>
+                                        <pl-button class="class-token-remove" variant="link" label="×" data-event$="[[item.name]]" on-click="[[onRemoveEventClick]]"></pl-button>
+                                    </div>
+                                </div>
+                                <pl-input value="{{item.value}}" placeholder="Например onClick" stretch></pl-input>
+                            </div>
+                        </template>
+                        <div class="meta-row" hidden$="[[!_isEmpty(eventItems)]]">
+                            <div class="meta-row-value">У выбранного элемента нет атрибутов событий on-*.</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
         `;
     }
 
     constructor() {
         super();
-        this._cssInspector = new Css();
-        this._inlineStyleMap = {};
+        this._css = new Css();
+        this._suppressClassObserver = false;
+        this._cssRulesFrame = 0;
     }
 
     _getTitle(title) {
@@ -352,23 +496,28 @@ class PropsPanel extends PlElement {
 
     _selectedChange(path) {
         if (path) {
-            const { tplNode, domNode, sourceNode } = this._resolveSelectedNodes(path);
+            const { tplNode, domNode, sourceNode, sourcePath } = this._resolveSelectedNodes(path);
+            const activeNode = sourceNode || tplNode || domNode;
             this.selectedTag = domNode?.localName || tplNode?.localName || '';
+            this.selectedSourcePath = sourcePath || path;
             this.data = this.fwt.getProperties(domNode, tplNode);
-            this.bindItems = this._collectBindItems(sourceNode || tplNode || domNode);
-            this.columnItems = this._collectGridColumns(sourceNode || tplNode || domNode, path);
-            const styles = this._collectStyleInfo(domNode, sourceNode || tplNode);
-            this.styleItems = styles.items;
-            this.styleRules = styles.rules;
-            this._inlineStyleMap = styles.inlineMap;
+            this.bindItems = this._collectBindItems(activeNode, this.data);
+            this.eventItems = this._collectEventItems(activeNode);
+            this.hasSelectedElement = activeNode instanceof Element;
+            this._setClassValueFromNode(activeNode);
+            this._setCssRulesFromNode(domNode || activeNode);
+            this.classDraft = '';
         } else {
             this.data = [];
             this.bindItems = [];
-            this.columnItems = [];
-            this.styleItems = [];
-            this.styleRules = [];
+            this.eventItems = [];
             this.selectedTag = '';
-            this._inlineStyleMap = {};
+            this.selectedSourcePath = '';
+            this.hasSelectedElement = false;
+            this._setClassValueSilently('');
+            this.classDraft = '';
+            this.classTokens = [];
+            this.cssRuleItems = [];
         }
         this._syncPanelMeta();
         this._buildGroups(this.data);
@@ -378,14 +527,66 @@ class PropsPanel extends PlElement {
         if (this.selected) this._selectedChange(this.selected);
     }
 
+    _selectedSourcePathChange() {
+        if (this.selected) this._selectedChange(this.selected);
+    }
+
     _resolveSelectedNodes(path) {
-        const domNode = findByXpath(this.domRoot, path);
-        const sourceNode = findByXpath(this.sourceTplRoot, path, true);
-        const runtimeTplNode = findByXpath(this.tplRoot, path, true);
+        const resolveExact = (root, xpath, origTpl) => {
+            if (!root || !xpath) return { node: null, path: null };
+            const candidates = buildXPathCandidates(xpath);
+            for (const candidate of candidates) {
+                const node = findByXpath(root, candidate, origTpl);
+                if (node) return { node, path: candidate };
+            }
+            return { node: null, path: null };
+        };
+
+        const sourceLookupPath = this.selectedSourcePath || path;
+        const domResolved = findByXpathWithFallback(this.domRoot, path);
+        let domNode = domResolved.node;
+        const sourceExact = resolveExact(this.sourceTplRoot, sourceLookupPath, true);
+        const sourceResolved = sourceExact.node
+            ? sourceExact
+            : findByXpathWithFallback(this.sourceTplRoot, sourceLookupPath, true);
+        const runtimeTplExact = resolveExact(this.tplRoot, path, true);
+        const runtimeTplResolved = runtimeTplExact.node
+            ? runtimeTplExact
+            : findByXpathWithFallback(this.tplRoot, path, true);
+        const sourceNode = sourceResolved.node;
+        const runtimeTplNode = runtimeTplResolved.node;
+        let tplNode = sourceNode || runtimeTplNode;
+
+        if (domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
+            const sourceByRuntime = resolveExact(this.sourceTplRoot, path, true).node;
+            const runtimeBySource = resolveExact(this.tplRoot, sourceLookupPath, true).node;
+            const compatible = [sourceByRuntime, runtimeBySource, runtimeTplNode, sourceNode]
+                .find((n) => n?.localName === domNode.localName);
+            if (compatible) tplNode = compatible;
+        }
+
+        if (domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
+            const nested = domNode.querySelector?.(tplNode.localName);
+            if (nested) domNode = nested;
+        }
+
+        try {
+            console.log('[nf-dev-editor][props-panel][_resolveSelectedNodes]', {
+                selectedPath: path || null,
+                selectedSourcePath: this.selectedSourcePath || null,
+                domNode: domNode?.localName || domNode?.nodeName || null,
+                tplNode: tplNode?.localName || tplNode?.nodeName || null,
+                sourceNode: sourceNode?.localName || sourceNode?.nodeName || null
+            });
+        } catch (_err) {
+            // ignore logging errors
+        }
+
         return {
             domNode,
             sourceNode,
-            tplNode: sourceNode || runtimeTplNode
+            tplNode,
+            sourcePath: sourceResolved.path || runtimeTplResolved.path || domResolved.path || path
         };
     }
 
@@ -393,31 +594,59 @@ class PropsPanel extends PlElement {
         if (!mut || mut.init || mut.path === 'data') {
             this._syncPanelMeta();
             this._buildGroups(newVal);
-            return;
-        }
-
-        if(mut && !mut.init && mut.path !== 'data') {
-            const m = mut.path.match(/^data\.(\d*)\.value/);
-            if(m) {
-                const data = newVal[m[1]];
-                if (!data) return;
-                const normalized = this._normalizeOutgoingValue(data, data.value);
-                this.changeProp(data.cmp, data.name, normalized);
-            }
         }
     }
 
     _groupsObserver(newVal, oldVal, mut) {
         if (!mut || mut.init || mut.path === 'groups') return;
-        const m = mut.path.match(/^groups\.(\d+)\.items\.(\d+)\.value/);
-        if (!m) return;
-
-        const groupIndex = Number(m[1]);
-        const itemIndex = Number(m[2]);
-        const data = newVal?.[groupIndex]?.items?.[itemIndex];
+        const ref = this._resolveGroupItemByMutationPath(mut.path, newVal) || this._resolveGroupItemFallback(mut.path, newVal, mut.value);
+        if (!ref) return;
+        const { data } = ref;
         if (!data) return;
         const normalized = this._normalizeOutgoingValue(data, data.value);
         this.changeProp(data.cmp, data.name, normalized);
+        this._buildGroups(this.data);
+    }
+
+    _resolveGroupItemByMutationPath(path, groups) {
+        const parts = String(path || '').split('.').filter(Boolean);
+        if (parts.length < 4) return null;
+
+        const groupsPos = parts.indexOf('groups');
+        if (groupsPos < 0) return null;
+        const groupIndex = Number(parts[groupsPos + 1]);
+        if (!Number.isFinite(groupIndex)) return null;
+
+        const itemsPos = parts.indexOf('items', groupsPos + 2);
+        if (itemsPos < 0) return null;
+        const itemIndex = Number(parts[itemsPos + 1]);
+        if (!Number.isFinite(itemIndex)) return null;
+
+        const tail = parts.slice(itemsPos + 2);
+        if (!tail.includes('value')) return null;
+
+        const data = groups?.[groupIndex]?.items?.[itemIndex];
+        if (!data) return null;
+        return { groupIndex, itemIndex, data };
+    }
+
+    _resolveGroupItemFallback(path, groups, mutationValue) {
+        const parts = String(path || '').split('.').filter(Boolean);
+        const groupsPos = parts.indexOf('groups');
+        if (groupsPos < 0) return null;
+        const groupIndex = Number(parts[groupsPos + 1]);
+        if (!Number.isFinite(groupIndex)) return null;
+        const itemsPos = parts.indexOf('items', groupsPos + 2);
+        if (itemsPos < 0) return null;
+        const itemIndex = Number(parts[itemsPos + 1]);
+        if (!Number.isFinite(itemIndex)) return null;
+
+        let data = groups?.[groupIndex]?.items?.[itemIndex];
+        if (!data && mutationValue && typeof mutationValue === 'object') {
+            data = mutationValue;
+        }
+        if (!data || !('name' in data) || !('cmp' in data)) return null;
+        return { groupIndex, itemIndex, data };
     }
 
     _bindItemsObserver(newVal, oldVal, mut) {
@@ -438,26 +667,42 @@ class PropsPanel extends PlElement {
         }
     }
 
-    _styleItemsObserver(newVal, oldVal, mut) {
-        if (!mut || mut.init || mut.path === 'styleItems') return;
-        const m = mut.path.match(/^styleItems\.(\d+)\.value/);
+    _eventItemsObserver(newVal, oldVal, mut) {
+        if (!mut || mut.init || mut.path === 'eventItems') return;
+        const m = mut.path.match(/^eventItems\.(\d+)\.value/);
         if (!m) return;
-
         const itemIndex = Number(m[1]);
         const item = newVal?.[itemIndex];
         if (!item?.name) return;
-
-        const nextValue = String(item.value ?? '').trim();
-        if (nextValue) {
-            this._inlineStyleMap[item.name] = nextValue;
-        } else {
-            delete this._inlineStyleMap[item.name];
-        }
-        this.changeAttribute('style', this._stringifyStyleMap(this._inlineStyleMap));
+        this.changeAttribute(item.name, item.value ?? '');
     }
 
     _isEditor(item, editor) {
         return (item?.editor || 'text') === editor;
+    }
+
+    _isTab(current, expected) {
+        return String(current || 'properties') === String(expected || '');
+    }
+
+    _tabVariant(current, expected) {
+        return this._isTab(current, expected) ? 'secondary' : 'link';
+    }
+
+    onTabClick(event) {
+        const tab = String(event?.currentTarget?.dataset?.tab || '').trim();
+        if (!tab) return;
+        this.activeTab = tab;
+    }
+
+    _toIconOptions(options) {
+        if (!Array.isArray(options)) return [];
+        return options.map((opt) => ({
+            value: String(opt?.value ?? ''),
+            text: String(opt?.text ?? opt?.value ?? ''),
+            icon: String(opt?.icon ?? ''),
+            title: String(opt?.title ?? opt?.text ?? opt?.value ?? '')
+        }));
     }
 
     _isLongText(value) {
@@ -469,12 +714,157 @@ class PropsPanel extends PlElement {
         return !Array.isArray(list) || list.length === 0;
     }
 
-    _collectBindItems(tplNode) {
+    onAddClassTokenClick() {
+        const draft = String(this.classDraft || '').trim();
+        if (!draft) return;
+        const additions = draft.split(/\s+/).filter(Boolean);
+        if (!additions.length) return;
+        const next = Array.from(new Set([...(this.classTokens || []), ...additions]));
+        this.classValue = next.join(' ');
+        this.classDraft = '';
+    }
+
+    onRemoveClassTokenClick(event) {
+        event?.stopPropagation?.();
+        const token = String(event?.currentTarget?.dataset?.token || '').trim();
+        if (!token) return;
+        const next = (this.classTokens || []).filter((item) => item !== token);
+        this.classValue = next.join(' ');
+    }
+
+    onClassTokenClick(event) {
+        const token = String(event?.currentTarget?.dataset?.token || '').trim();
+        if (!token || this._isBindExpression(token)) return;
+        this.dispatchEvent(new CustomEvent('open-css-rule', {
+            detail: {
+                token,
+                selector: `.${token}`
+            },
+            bubbles: true,
+            composed: true
+        }));
+    }
+
+    onRemoveEventClick(event) {
+        const attrName = String(event?.currentTarget?.dataset?.event || '').trim();
+        if (!attrName) return;
+        const next = (this.eventItems || []).filter((item) => item?.name !== attrName);
+        this.eventItems = next;
+        this.changeAttribute(attrName, '');
+    }
+
+    _classValueObserver(value) {
+        if (this._suppressClassObserver) return;
+        if (!this.selected) return;
+        const normalized = this._normalizeClassValue(value);
+        if (normalized !== String(value ?? '')) this._setClassValueSilently(normalized);
+        this.classTokens = this._classTokens(normalized);
+        this.changeAttribute('class', normalized);
+        this._scheduleCssRulesRefresh();
+    }
+
+    _setClassValueFromNode(node) {
+        if (!(node instanceof Element)) {
+            this._setClassValueSilently('');
+            this.classTokens = [];
+            return;
+        }
+        const classValue = String(node.getAttribute('class') ?? '');
+        this._setClassValueSilently(classValue);
+        this.classTokens = this._classTokens(classValue);
+    }
+
+    _setClassValueSilently(value) {
+        this._suppressClassObserver = true;
+        this.classValue = value;
+        this._suppressClassObserver = false;
+    }
+
+    _normalizeClassValue(value) {
+        const text = String(value ?? '').trim();
+        if (!text) return '';
+        if (this._isBindExpression(text)) return text;
+        return Array.from(new Set(text.split(/\s+/).filter(Boolean))).join(' ');
+    }
+
+    _classTokens(value) {
+        const text = String(value ?? '').trim();
+        if (!text) return [];
+        if (this._isBindExpression(text)) return [text];
+        return text.split(/\s+/).filter(Boolean);
+    }
+
+    _isBindExpression(value) {
+        return typeof value === 'string' && /({{.*}}|\[\[.*]])/.test(value);
+    }
+
+    _setCssRulesFromNode(node) {
+        if (!(node instanceof Element)) {
+            this.cssRuleItems = [];
+            return;
+        }
+        const rules = this._css?.getRules?.(node) || [];
+        this.cssRuleItems = rules.map((rule, idx) => ({
+            id: `${idx}`,
+            selector: String(rule?.selectorText || ''),
+            origin: this._resolveRuleOrigin(rule),
+            declarations: this._formatRuleDeclarations(rule)
+        }));
+    }
+
+    _resolveRuleOrigin(rule) {
+        const href = rule?.parentStyleSheet?.href;
+        if (href) {
+            try {
+                const url = new URL(href, window.location.origin);
+                const file = url.pathname.split('/').filter(Boolean).pop();
+                return file || url.pathname || href;
+            } catch (_err) {
+                return href;
+            }
+        }
+        const ownerNode = rule?.parentStyleSheet?.ownerNode;
+        if (ownerNode instanceof Element) {
+            const marker = ownerNode.getAttribute('component') || ownerNode.getAttribute('data-dev-editor-preview-style');
+            if (marker) return `style[${marker}]`;
+        }
+        return 'inline stylesheet';
+    }
+
+    _formatRuleDeclarations(rule) {
+        const selector = String(rule?.selectorText || '').trim();
+        let cssText = String(rule?.cssText || '').trim();
+        if (!cssText) return '';
+        if (selector && cssText.startsWith(selector)) {
+            cssText = cssText.slice(selector.length).trim();
+        }
+        return cssText.replace(/\s+/g, ' ');
+    }
+
+    _scheduleCssRulesRefresh() {
+        if (this._cssRulesFrame) cancelAnimationFrame(this._cssRulesFrame);
+        this._cssRulesFrame = requestAnimationFrame(() => {
+            this._cssRulesFrame = 0;
+            if (!this.selected) return;
+            const { domNode, tplNode, sourceNode } = this._resolveSelectedNodes(this.selected);
+            this._setCssRulesFromNode(domNode || sourceNode || tplNode);
+        });
+    }
+
+    _collectBindItems(tplNode, properties) {
         if (!(tplNode instanceof Element)) return [];
         const result = [];
         const nodeLabel = this._getNodeBindLabel(tplNode);
+        const configuredProps = new Set((Array.isArray(properties) ? properties : [])
+            .map((item) => String(item?.name || '').trim())
+            .filter(Boolean));
+        const toCamel = (name) => String(name || '').replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        const normalizeAttrToProp = (name) => toCamel(String(name || '').replace(/\$$/, ''));
 
         [...tplNode.attributes].forEach((attr) => {
+            if (attr.name === 'class' || attr.name.startsWith('on-')) return;
+            const propLikeName = normalizeAttrToProp(attr.name);
+            if (configuredProps.has(propLikeName)) return;
             const value = attr.value ?? '';
             result.push({
                 kind: 'attribute',
@@ -500,36 +890,15 @@ class PropsPanel extends PlElement {
         return result;
     }
 
-    _collectGridColumns(node, basePath = this.selected) {
-        if (!(node instanceof Element) || node.localName !== 'pl-grid') return [];
-        const result = [];
-        const walk = (parent, parentPath, level = 0) => {
-            const columns = [...(parent.children || [])].filter((child) => child?.localName === 'pl-grid-column');
-            const counters = new Map();
-            columns.forEach((column, index) => {
-                const header = column.getAttribute('header');
-                const field = column.getAttribute('field');
-                const title = header || field || `Колонка ${index + 1}`;
-                const indent = level > 0 ? `${'· '.repeat(level)}` : '';
-                const count = counters.get(column.localName) || 0;
-                counters.set(column.localName, count + 1);
-                const segment = count > 0 ? `${column.localName}[${count + 1}]` : column.localName;
-                const path = parentPath === '/' ? `/${segment}` : `${parentPath}/${segment}`;
-                result.push({
-                    label: `${indent}${title}`,
-                    path
-                });
-                walk(column, path, level + 1);
-            });
-        };
-        walk(node, basePath || '/', 0);
-        return result;
-    }
-
-    onColumnSelect(e) {
-        const path = e?.currentTarget?.dataset?.path || e?.model?.item?.path;
-        if (!path) return;
-        window.dispatchEvent(new CustomEvent('select-component', { detail: { path } }));
+    _collectEventItems(tplNode) {
+        if (!(tplNode instanceof Element)) return [];
+        const attrs = [...tplNode.attributes]
+            .filter((attr) => String(attr?.name || '').startsWith('on-'));
+        return attrs.map((attr) => ({
+            name: String(attr.name || ''),
+            label: String(attr.name || '').replace(/^on-/, ''),
+            value: String(attr.value ?? '')
+        }));
     }
 
     _getNodeBindLabel(node) {
@@ -539,77 +908,26 @@ class PropsPanel extends PlElement {
         return className ? `${tag}.${className}` : tag;
     }
 
-    _parseStyleMap(styleText) {
-        const map = {};
-        const text = String(styleText || '');
-        text.split(';').forEach((chunk) => {
-            const [rawName, ...rest] = chunk.split(':');
-            const name = String(rawName || '').trim();
-            if (!name) return;
-            const value = rest.join(':').trim();
-            if (!value) return;
-            map[name] = value;
-        });
-        return map;
-    }
-
-    _stringifyStyleMap(styleMap) {
-        const entries = Object.entries(styleMap || {}).filter(([, value]) => String(value || '').trim() !== '');
-        return entries.map(([name, value]) => `${name}: ${value};`).join(' ');
-    }
-
-    _collectStyleInfo(domNode, tplNode) {
-        if (!(domNode instanceof Element)) return { items: [], rules: [], inlineMap: {} };
-
-        const styleProps = [
-            'display', 'position', 'box-sizing',
-            'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
-            'margin', 'padding', 'gap', 'align-items', 'justify-content',
-            'color', 'background-color', 'border', 'border-radius',
-            'font-size', 'font-weight', 'line-height', 'text-align',
-            'overflow', 'overflow-x', 'overflow-y',
-            'opacity', 'z-index'
-        ];
-
-        const inlineMap = this._parseStyleMap(tplNode?.getAttribute?.('style') || '');
-        const computed = getComputedStyle(domNode);
-        const items = styleProps.map((name) => ({
-            name,
-            value: inlineMap[name] ?? (computed.getPropertyValue(name)?.trim() || '')
-        })).filter((item) => item.value !== '');
-
-        const rules = this._cssInspector.getRules(domNode).map((rule) => ({
-            selector: rule.selectorText,
-            declarations: this._stringifyRule(rule)
-        })).filter((rule) => rule.declarations);
-
-        return { items, rules, inlineMap };
-    }
-
-    _stringifyRule(rule) {
-        const style = rule?.style;
-        if (!style) return '';
-        if (style.cssText?.trim()) return style.cssText.trim();
-
-        const values = [];
-        for (let i = 0; i < style.length; i++) {
-            const prop = style[i];
-            const val = style.getPropertyValue(prop);
-            const priority = style.getPropertyPriority(prop);
-            values.push(`${prop}: ${val}${priority ? ` !${priority}` : ''};`);
-        }
-        return values.join(' ');
-    }
 
     _normalizeOutgoingValue(item, value) {
         if (!item) return value;
-        if (item.editor === 'boolean' || item.propType === 'Boolean') return Boolean(value);
+        if (item.editor === 'boolean' || item.propType === 'Boolean') return this._normalizeBooleanValue(value);
+        if (item.editor === 'icon-group') return value === undefined || value === null ? '' : String(value);
         if (item.editor === 'number' || item.propType === 'Number') {
             if (value === '' || value === null || value === undefined) return '';
             const parsed = Number(value);
             return Number.isFinite(parsed) ? parsed : value;
         }
         return value;
+    }
+
+    _normalizeBooleanValue(value) {
+        if (value === true || value === false) return value;
+        if (typeof value === 'number') return value !== 0;
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (['1', 'true', 't', 'yes', 'y', 'on', 'да'].includes(normalized)) return true;
+        if (['0', 'false', 'f', 'no', 'n', 'off', 'нет', ''].includes(normalized)) return false;
+        return Boolean(value);
     }
 
     _syncPanelMeta() {
@@ -624,8 +942,12 @@ class PropsPanel extends PlElement {
     _buildGroups(data) {
         const list = Array.isArray(data) ? data : [];
         const map = new Map();
+        const valuesMap = new Map();
+
+        list.forEach((prop) => valuesMap.set(prop?.name, prop?.value));
 
         list.forEach((prop) => {
+            if (!this._isPropertyVisible(prop, valuesMap)) return;
             const groupId = prop.groupId || 'common';
             if (!map.has(groupId)) {
                 map.set(groupId, {
@@ -641,6 +963,11 @@ class PropsPanel extends PlElement {
 
         const groups = Array.from(map.values());
         groups.forEach((group) => {
+            group.items.forEach((prop) => {
+                prop.iconOptions = prop.editor === 'icon-group'
+                    ? this._toIconOptions(prop.options)
+                    : [];
+            });
             group.items.sort((a, b) => {
                 const ao = Number.isFinite(a.order) ? a.order : Number.MAX_SAFE_INTEGER;
                 const bo = Number.isFinite(b.order) ? b.order : Number.MAX_SAFE_INTEGER;
@@ -657,9 +984,71 @@ class PropsPanel extends PlElement {
         this.groups = groups;
     }
 
+    _isPropertyVisible(prop, valuesMap) {
+        const condition = prop?.visibleWhen;
+        if (!condition) return true;
+        if (Array.isArray(condition)) {
+            return condition.every((item) => this._checkVisibleCondition(item, valuesMap));
+        }
+        if (Array.isArray(condition?.allOf)) {
+            return condition.allOf.every((item) => this._checkVisibleCondition(item, valuesMap));
+        }
+        if (Array.isArray(condition?.anyOf)) {
+            return condition.anyOf.some((item) => this._checkVisibleCondition(item, valuesMap));
+        }
+        return this._checkVisibleCondition(condition, valuesMap);
+    }
+
+    _checkVisibleCondition(condition, valuesMap) {
+        if (!condition || typeof condition !== 'object') return true;
+        const propName = String(condition.prop || condition.property || condition.name || '');
+        if (!propName) return true;
+        const sourceValue = valuesMap.get(propName);
+        if (typeof sourceValue === 'string' && /({{.*}}|\[\[.*]])/.test(sourceValue)) {
+            return true;
+        }
+        const value = this._normalizeConditionValue(sourceValue);
+
+        if ('equals' in condition) {
+            return value === this._normalizeConditionValue(condition.equals);
+        }
+
+        if ('notEquals' in condition) {
+            return value !== this._normalizeConditionValue(condition.notEquals);
+        }
+
+        if (Array.isArray(condition.in)) {
+            return condition.in.map((item) => this._normalizeConditionValue(item)).includes(value);
+        }
+
+        if (Array.isArray(condition.notIn)) {
+            return !condition.notIn.map((item) => this._normalizeConditionValue(item)).includes(value);
+        }
+
+        if ('truthy' in condition) {
+            return Boolean(value) === Boolean(condition.truthy);
+        }
+
+        if ('exists' in condition) {
+            const exists = value !== undefined && value !== null && value !== '';
+            return Boolean(condition.exists) ? exists : !exists;
+        }
+
+        return true;
+    }
+
+    _normalizeConditionValue(value) {
+        if (typeof value !== 'string') return value;
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true') return true;
+        if (normalized === 'false') return false;
+        return value;
+    }
+
     changeProp(instance, name, value, commit) {
         let cmd = {
             path: this.selected,
+            sourcePath: this.selectedSourcePath || this.selected,
             property: name,
             value,
             commit
@@ -671,6 +1060,7 @@ class PropsPanel extends PlElement {
         if (!this.selected || !name) return;
         let cmd = {
             path: this.selected,
+            sourcePath: this.selectedSourcePath || this.selected,
             attribute: name,
             value
         };
@@ -681,6 +1071,7 @@ class PropsPanel extends PlElement {
         if (!this.selected || !Array.isArray(textPath)) return;
         let cmd = {
             path: this.selected,
+            sourcePath: this.selectedSourcePath || this.selected,
             textPath,
             value
         };

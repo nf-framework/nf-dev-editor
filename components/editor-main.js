@@ -5,14 +5,50 @@ import * as polylibTools from "../lib/selectors/polylib-component.js";
 import { getDesignedTpl, getFullTemplate, getStyles } from "../lib/selectors/polylib-component.js";
 import {AddElementCommand, DelElementCommand, MoveElementCommand} from "../lib/commands.js";
 import drndr from "../lib/drndr.js";
+import "@plcmp/pl-flex-layout";
+import "@plcmp/pl-button";
 import "./component-list.js";
 import "./tree-list.js";
 import "./props-panel.js";
 import "./scripts-editor.js";
 import "./styles-editor.js";
 
-import { findByXpath, getXPath } from "../lib/common.js";
+import { buildXPathCandidates, findByXpath, findByXpathWithFallback, getXPath } from "../lib/common.js";
 import {debounce} from "@plcmp/utils";
+
+const PL_COMPONENT_MODULES = {
+    "pl-action": "@plcmp/pl-action",
+    "pl-badge": "@plcmp/pl-badge",
+    "pl-button": "@plcmp/pl-button",
+    "pl-checkbox": "@plcmp/pl-checkbox",
+    "pl-combobox": "@plcmp/pl-combobox",
+    "pl-data-observer": "@plcmp/pl-data-observer",
+    "pl-data-tree": "@plcmp/pl-data-tree",
+    "pl-dataset": "@plcmp/pl-dataset",
+    "pl-datetime": "@plcmp/pl-datetime",
+    "pl-dom-if": "@plcmp/pl-dom-if",
+    "pl-drawer": "@plcmp/pl-drawer",
+    "pl-dropdown": "@plcmp/pl-dropdown",
+    "pl-flex-layout": "@plcmp/pl-flex-layout",
+    "pl-grid": "@plcmp/pl-grid",
+    "pl-grid-column": "@plcmp/pl-grid/pl-grid-column",
+    "pl-icon": "@plcmp/pl-icon",
+    "pl-icon-button": "@plcmp/pl-icon-button",
+    "pl-input": "@plcmp/pl-input",
+    "pl-input-mask": "@plcmp/pl-input-mask",
+    "pl-labeled-container": "@plcmp/pl-labeled-container",
+    "pl-popover": "@plcmp/pl-popover",
+    "pl-radio-button": "@plcmp/pl-radio-button",
+    "pl-radio-group": "@plcmp/pl-radio-group",
+    "pl-repeat": "@plcmp/pl-repeat",
+    "pl-tab": "@plcmp/pl-tabpanel",
+    "pl-tabpanel": "@plcmp/pl-tabpanel",
+    "pl-table": "@plcmp/pl-table",
+    "pl-textarea": "@plcmp/pl-textarea",
+    "pl-tooltip": "@plcmp/pl-tooltip",
+    "pl-valid-observer": "@plcmp/pl-valid-observer",
+    "pl-virtual-scroll": "@plcmp/pl-virtual-scroll"
+};
 
 class EditorMain extends PlElement {
     static properties = {
@@ -24,8 +60,10 @@ class EditorMain extends PlElement {
             domRoot: { type: Object },
             tplRoot: { type: Object },
             sourceTplRoot: { type: Object },
+            treeRoot: { type: Object },
             formClassName: { type: String, value: '' },
             selectedPath: { type: String },
+            selectedSourcePath: { type: String, value: '' },
             scriptsDelta: { type: Array, value: () => ([]) },
             stylesText: { type: String, value: '' },
             sourceScripts: { type: String, value: '' },
@@ -47,7 +85,9 @@ class EditorMain extends PlElement {
                 box-sizing: border-box;
                 overflow: auto;
                 display: flex;
-                flex-direction: column;            
+                flex-direction: column;
+                background: var(--pl-background-color);
+                border-right: 1px solid var(--pl-grey-light);
             }
 
             #right-panel {
@@ -60,23 +100,62 @@ class EditorMain extends PlElement {
                 overflow: auto;
                 padding: 8px;
                 border-left: 1px solid var(--pl-grey-light);
-                background: var(--white);         
+                background: var(--white);
+            }
+
+            .left-toolbar {
+                position: sticky;
+                top: 0;
+                z-index: 3;
+                padding: 8px;
+                border-bottom: 1px solid var(--pl-grey-light);
+                background: var(--pl-background-color);
+            }
+
+            .left-toolbar-title {
+                font: var(--pl-header-font);
+                color: var(--pl-header-color);
+                margin-bottom: 8px;
+            }
+
+            .left-toolbar-actions {
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+
+            .left-toolbar-actions pl-button {
+                --pl-base-size: 28px;
+            }
+
+            pl-tree-list {
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+
+            pl-component-list {
+                flex: 0 0 280px;
+                min-height: 180px;
+                border-top: 1px solid var(--pl-grey-light);
             }
         `;
 
     static template = html`
         <div id="left-panel">
-            <pl-flex-layout>
-                <pl-button on-click="[[select]]" label="select"></pl-button>
-                <pl-button on-click="[[save]]" label="save"></pl-button>
-                <pl-button on-click="[[scripts]]" label="scripts"></pl-button>
-                <pl-button on-click="[[styles]]" label="styles"></pl-button>
-            </pl-flex-layout>
-            <pl-tree-list inspect="[[tplRoot]]" root-label="[[formClassName]]" selected="[[selectedPath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
+            <div class="left-toolbar">
+                <div class="left-toolbar-title">Конструктор формы</div>
+                <pl-flex-layout class="left-toolbar-actions">
+                    <pl-button variant="ghost" on-click="[[select]]" label="Выбрать"></pl-button>
+                    <pl-button variant="primary" on-click="[[save]]" label="Сохранить"></pl-button>
+                    <pl-button variant="ghost" on-click="[[scripts]]" label="JS"></pl-button>
+                    <pl-button variant="ghost" on-click="[[styles]]" label="CSS"></pl-button>
+                    <pl-button variant="ghost" on-click="[[copySelectedPath]]" disabled$="[[!selectedPath]]" label="Путь"></pl-button>
+                </pl-flex-layout>
+            </div>
+            <pl-tree-list inspect="[[treeRoot]]" root-label="[[formClassName]]" selected="[[selectedSourcePath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
             <pl-component-list></pl-component-list>
         </div>
         <div id="right-panel">
-            <pl-props-panel tpl-root="[[tplRoot]]" source-tpl-root="[[sourceTplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" fwt="[[fwt]]"></pl-props-panel>
+            <pl-props-panel tpl-root="[[tplRoot]]" source-tpl-root="[[sourceTplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" selected-source-path="[[selectedSourcePath]]" fwt="[[fwt]]" on-open-css-rule="[[onOpenCssRule]]"></pl-props-panel>
         </div>
         <pl-scripts-editor delta="{{scriptsDelta}}" source-script="[[sourceScripts]]" fwt="[[fwt]]" form="[[editForm]]" id="scriptsEditor"></pl-scripts-editor>
         <pl-styles-editor styles-text="{{stylesText}}" fwt="[[fwt]]" form="[[editForm]]" id="stylesEditor"></pl-styles-editor>
@@ -90,6 +169,10 @@ class EditorMain extends PlElement {
         this._sourceTemplateHost = null;
         this._sourceRequestId = 0;
         this._sourceCommandLog = [];
+        this._notifyFormUpdate = debounce(() => {
+            window.dispatchEvent(new CustomEvent('form-update', { detail: { source: 'command' } }));
+        }, 100);
+        this._ensurePlComponentsLoaded();
         window.addEventListener('select-component', e => this.onSelectComponent(e));
         window.addEventListener('command', e => this.onCommand(e));
         window.addEventListener('form-update', e => this.onFormUpdate(e));
@@ -130,10 +213,36 @@ class EditorMain extends PlElement {
         }
     }
     onSelectComponent(e) {
-        this.selectedPath = e.detail.path;
+        const detail = e?.detail || {};
+        const runtimePath = detail.runtimePath || detail.path || '';
+        const templatePath = detail.templatePath || '';
+        this.selectedPath = runtimePath;
+        this.selectedSourcePath = this._resolveSourceSelectionPath(runtimePath, templatePath);
         if (this.selected) this.selected.draggable = false;
         const root = this.editForm?.root;
-        this.selected = root ? findByXpath(root, this.selectedPath) : null;
+        let selectedNode = detail.target || null;
+        if (root && selectedNode?.getRootNode?.() instanceof ShadowRoot && selectedNode.getRootNode() !== root) {
+            selectedNode = selectedNode.getRootNode().host || selectedNode;
+        }
+        if (!(selectedNode instanceof Node) || (root && selectedNode !== root && !root.contains?.(selectedNode))) {
+            selectedNode = root
+                ? (findByXpath(root, this.selectedPath) || findByXpathWithFallback(root, this.selectedPath).node)
+                : null;
+        }
+        try {
+            console.log('[nf-dev-editor][editor-main][onSelectComponent]', {
+                detailPath: detail.path || null,
+                runtimePath: runtimePath || null,
+                templatePath: templatePath || null,
+                selectedSourcePath: this.selectedSourcePath || null,
+                detailTarget: detail.target?.localName || detail.target?.nodeName || null,
+                resolvedNode: selectedNode?.localName || selectedNode?.nodeName || null,
+                resolvedByFallback: detail.target !== selectedNode
+            });
+        } catch (_err) {
+            // ignore logging errors
+        }
+        this.selected = selectedNode;
         if(this.selected) {
             this.selected.draggable = true;
         }
@@ -147,11 +256,23 @@ class EditorMain extends PlElement {
         this.$.stylesEditor.open(this.editForm);
     }
 
+    onOpenCssRule(event) {
+        const token = String(event?.detail?.token || '').trim();
+        if (!token) return;
+        this.$.stylesEditor.openForClassToken(token, this.editForm);
+    }
+
+    copySelectedPath() {
+        if (!this.selectedPath) return;
+        this._copyText(this.selectedPath);
+    }
+
     onCommand(e) {
         let command = {
             ...e.detail,
             tplRoot: this.tplRoot,
-            domRoot: this.domRoot
+            domRoot: this.domRoot,
+            sourceTplRoot: this.sourceTplRoot
         };
         const sourceCommand = this._normalizeSourceCommand(command);
         if (sourceCommand) {
@@ -162,12 +283,17 @@ class EditorMain extends PlElement {
         let cmdResult = this.fwt.execCommand(command);
         let select = cmdResult?.select;
         if (select) {
+            const runtimePath = select;
             this.selectedPath = null;
-            this.selectedPath = select;
-            this.selected = this.editForm?.root ? findByXpath(this.editForm.root, this.selectedPath) : null;
+            this.selectedPath = runtimePath;
+            this.selectedSourcePath = this._resolveSourceSelectionPath(runtimePath, '');
+            this.selected = this.editForm?.root
+                ? (findByXpath(this.editForm.root, this.selectedPath) || findByXpathWithFallback(this.editForm.root, this.selectedPath).node)
+                : null;
         }
         //TODO: get form name and mark changed
         this.changes[command.form] = true;
+        this._notifyFormUpdate();
         domSelector.drawSelector(this._getDrawTarget(this.selected));
     }
 
@@ -188,6 +314,7 @@ class EditorMain extends PlElement {
                 this.sourceScripts = '';
                 this.baseSignature = '';
                 this.sourceTplRoot = null;
+                this.treeRoot = null;
                 this._sourceTemplateHost = null;
                 domSelector.root = null;
                 return;
@@ -200,6 +327,8 @@ class EditorMain extends PlElement {
             this.sourceScripts = this.fwt.getFunctions(form).map(x => x.text).join('\n');
             this.baseSignature = '';
             this.sourceTplRoot = null;
+            this.treeRoot = this.tplRoot;
+            this.selectedSourcePath = '';
             this._sourceCommandLog = [];
             this._setSourceTemplate(this.tplRoot?.cloneNode(true));
             this._loadBackendSource(form);
@@ -212,6 +341,8 @@ class EditorMain extends PlElement {
             this.sourceScripts = '';
             this.baseSignature = '';
             this.sourceTplRoot = null;
+            this.treeRoot = null;
+            this.selectedSourcePath = '';
             this._sourceTemplateHost = null;
             this._sourceCommandLog = [];
         }
@@ -221,7 +352,9 @@ class EditorMain extends PlElement {
 
     onHighlight(e) {
         let { path, position } = e.detail;
-        let node = path && this.editForm?.root ? findByXpath(this.editForm.root, path) : null;
+        let node = path && this.editForm?.root
+            ? (findByXpath(this.editForm.root, path) || findByXpathWithFallback(this.editForm.root, path).node)
+            : null;
         if (node) {
             domSelector.drawSelector(this._getDrawTarget(node), { position });
         } else {
@@ -328,12 +461,14 @@ class EditorMain extends PlElement {
         if (!node) {
             this._sourceTemplateHost = null;
             this.sourceTplRoot = null;
+            this.treeRoot = this.tplRoot || null;
             return;
         }
         const host = document.createElement('template');
         host.content.appendChild(node);
         this._sourceTemplateHost = host;
         this.sourceTplRoot = host;
+        this.treeRoot = host;
     }
 
     _getSaveTemplateText() {
@@ -377,6 +512,7 @@ class EditorMain extends PlElement {
             type: 'dom',
             command: command.command,
             path: command.path,
+            sourcePath: command.sourcePath,
             position: command.position,
             element: command.element,
             property: command.property,
@@ -390,16 +526,24 @@ class EditorMain extends PlElement {
         if (!host?.content || command?.type !== 'dom') return;
 
         const root = host.content;
+        const findSourceNode = (path) => {
+            const primaryPath = command.sourcePath || path;
+            let node = findByXpath(root, primaryPath, true) || findByXpathWithFallback(root, primaryPath, true).node;
+            if (!node && command.sourcePath && command.path && command.sourcePath !== command.path) {
+                node = findByXpath(root, command.path, true) || findByXpathWithFallback(root, command.path, true).node;
+            }
+            return node;
+        };
         try {
             if (command.command === 'change-property') {
-                const target = findByXpath(root, command.path, true);
+                const target = findSourceNode(command.path);
                 if (!target) return;
                 setAttrValue(target, command.property, command.value);
                 return;
             }
 
             if (command.command === 'change-attribute') {
-                const target = findByXpath(root, command.path, true);
+                const target = findSourceNode(command.path);
                 if (!target || !command.attribute) return;
                 if (command.value === '' || command.value === null || command.value === undefined) {
                     target.removeAttribute(command.attribute);
@@ -410,7 +554,7 @@ class EditorMain extends PlElement {
             }
 
             if (command.command === 'change-text-node') {
-                const target = findByXpath(root, command.path, true);
+                const target = findSourceNode(command.path);
                 if (!target) return;
                 let node = target;
                 for (const idx of (command.textPath || [])) {
@@ -422,21 +566,21 @@ class EditorMain extends PlElement {
             }
 
             if (command.command === 'add-element') {
-                const target = findByXpath(root, command.path, true);
+                const target = findSourceNode(command.path);
                 const node = this._createElementForTemplate(command.element);
                 this._appendWithPosition(node, target, command.position);
                 return;
             }
 
             if (command.command === 'move-element') {
-                const node = findByXpath(root, command.element, true);
-                const target = findByXpath(root, command.path, true);
+                const node = findSourceNode(command.element);
+                const target = findSourceNode(command.path);
                 this._appendWithPosition(node, target, command.position);
                 return;
             }
 
             if (command.command === 'del-element') {
-                const target = findByXpath(root, command.path, true);
+                const target = findSourceNode(command.path);
                 target?.remove?.();
             }
         } catch (err) {
@@ -469,6 +613,7 @@ class EditorMain extends PlElement {
             host.innerHTML = data?.template || '';
             this._sourceTemplateHost = host;
             this.sourceTplRoot = host;
+            this.treeRoot = host;
             this._sourceCommandLog.forEach(cmd => this._applyCommandToSourceTemplate(cmd, host));
         } catch (err) {
             console.warn('[nf-dev-editor] unable to load backend source:', err);
@@ -477,6 +622,139 @@ class EditorMain extends PlElement {
 
     close() {
         this.opened = false;
+    }
+
+    _ensurePlComponentsLoaded() {
+        const loader = globalThis?.customLoader;
+        const modules = Object.entries(PL_COMPONENT_MODULES);
+        const tasks = [];
+
+        modules.forEach(([tagName, modulePath]) => {
+            if (customElements.get(tagName)) return;
+
+            if (typeof loader === 'function') {
+                try {
+                    const result = loader(tagName);
+                    if (result?.then) {
+                        tasks.push(result.catch(() => this._safeImportModule(modulePath)));
+                        return;
+                    }
+                } catch (_err) {
+                    // fallback to import below
+                }
+            }
+
+            tasks.push(this._safeImportModule(modulePath));
+        });
+
+        if (tasks.length > 0) {
+            Promise.allSettled(tasks).catch(() => {
+                // ignore preload failures in editor bootstrap
+            });
+        }
+    }
+
+    _resolveSourceSelectionPath(runtimePath, templatePath) {
+        const sourceRoot = this.sourceTplRoot;
+        const fallback = runtimePath || templatePath || '';
+        if (!sourceRoot || !fallback) return fallback;
+
+        const resolveExactPath = (path) => {
+            const candidates = buildXPathCandidates(path);
+            for (const candidate of candidates) {
+                const node = findByXpath(sourceRoot, candidate, true);
+                if (node) return { node, path: candidate };
+            }
+            return { node: null, path: null };
+        };
+        const resolvePath = (path) => findByXpathWithFallback(sourceRoot, path, true);
+        const normalize = (segment) => String(segment || '')
+            .replace(/\[\d+]/g, '')
+            .replace(/\{\d+}/g, '')
+            .toLowerCase();
+        const split = (path) => String(path || '').split('/').filter(Boolean);
+
+        const runtimeSegs = split(runtimePath);
+        const tplSegs = split(templatePath);
+
+        if (runtimeSegs.length && tplSegs.length && runtimeSegs.length >= tplSegs.length) {
+            const runtimeTail = runtimeSegs.slice(runtimeSegs.length - tplSegs.length).map(normalize);
+            const tplTail = tplSegs.map(normalize);
+            const sameTail = runtimeTail.length === tplTail.length
+                && runtimeTail.every((seg, idx) => seg === tplTail[idx]);
+            if (sameTail) {
+                const start = runtimeSegs.length - tplSegs.length;
+                for (let cut = start; cut >= 0; cut--) {
+                    const prefix = runtimeSegs.slice(0, cut);
+                    const candidate = '/' + [...prefix, 'template', ...tplSegs].join('/');
+                    const resolved = resolveExactPath(candidate);
+                    try {
+                        console.log('[nf-dev-editor][editor-main][resolveSourceSelectionPath]', {
+                            runtimePath,
+                            templatePath,
+                            candidate,
+                            resolvedPath: resolved?.path || null,
+                            resolvedNode: resolved?.node?.localName || resolved?.node?.nodeName || null
+                        });
+                    } catch (_err) {
+                        // ignore logging errors
+                    }
+                    if (resolved.node && resolved.path) return resolved.path;
+                }
+            }
+        }
+
+        const direct = resolveExactPath(runtimePath);
+        try {
+            console.log('[nf-dev-editor][editor-main][resolveSourceSelectionPath][direct]', {
+                runtimePath,
+                templatePath,
+                resolvedPath: direct?.path || null,
+                resolvedNode: direct?.node?.localName || direct?.node?.nodeName || null
+            });
+        } catch (_err) {
+            // ignore logging errors
+        }
+        if (direct.node && direct.path) return direct.path;
+
+        const fallbackResolved = resolvePath(runtimePath);
+        if (fallbackResolved?.node && fallbackResolved?.path) return fallbackResolved.path;
+
+        return fallback;
+    }
+
+    _safeImportModule(modulePath) {
+        if (!modulePath) return Promise.resolve();
+        return import(modulePath).catch(() => {
+            // ignore missing module and continue
+        });
+    }
+
+    _copyText(text) {
+        const value = String(text || '');
+        if (!value) return;
+        const clipboard = globalThis?.navigator?.clipboard;
+        if (clipboard?.writeText) {
+            clipboard.writeText(value).catch(() => this._legacyCopy(value));
+            return;
+        }
+        this._legacyCopy(value);
+    }
+
+    _legacyCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+        } catch (_err) {
+            // ignore
+        }
+        ta.remove();
     }
 
 }

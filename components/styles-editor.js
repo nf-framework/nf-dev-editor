@@ -38,6 +38,12 @@ class PlStylesEditor extends PlElement {
         this.$.drawer.opened = !this.$.drawer.opened;
     }
 
+    openForClassToken(classToken, form) {
+        if (form) this.form = form;
+        this.$.drawer.opened = true;
+        this._scrollToClassToken(classToken);
+    }
+
     _setStylesText(value) {
         this._skipObserver = true;
         this.stylesText = value;
@@ -96,6 +102,39 @@ class PlStylesEditor extends PlElement {
     _removePreviewStyle() {
         if (this._previewStyle?.isConnected) this._previewStyle.remove();
         this._previewStyle = null;
+    }
+
+    _scrollToClassToken(classToken) {
+        const token = String(classToken || '').trim();
+        if (!token) return;
+        const text = String(this.stylesText || '');
+        if (!text) return;
+
+        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`\\.${escaped}(?![\\w-])`);
+        const match = regex.exec(text);
+        if (!match) return;
+        const index = match.index;
+        const before = text.slice(0, index);
+        const row = before.split('\n').length;
+        const col = index - (before.lastIndexOf('\n') + 1) + 1;
+
+        const reveal = () => {
+            const editor = this.$.codeeditor?.editor;
+            if (!editor?.gotoLine) return false;
+            editor.gotoLine(row, col, true);
+            editor.scrollToLine(row, true, true, () => {});
+            editor.focus();
+            return true;
+        };
+
+        let attempts = 0;
+        const tryReveal = () => {
+            attempts += 1;
+            if (reveal()) return;
+            if (attempts < 12) requestAnimationFrame(tryReveal);
+        };
+        requestAnimationFrame(tryReveal);
     }
 }
 

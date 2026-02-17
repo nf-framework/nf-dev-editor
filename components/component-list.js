@@ -1,70 +1,168 @@
 import { PlElement, html, css } from "polylib";
 
 class ComponentList extends PlElement {
+    static get properties() {
+        return {
+            groups: {
+                type: Array,
+                value: () => ([
+                    {
+                        title: 'Поля ввода',
+                        items: [
+                            { cmp: 'pl-input', label: 'pl-input' },
+                            { cmp: 'pl-input-mask', label: 'pl-input-mask' },
+                            { cmp: 'pl-combobox', label: 'pl-combobox' },
+                            { cmp: 'pl-datetime', label: 'pl-datetime' },
+                            { cmp: 'pl-checkbox', label: 'pl-checkbox' },
+                            { cmp: 'pl-radio-group', label: 'pl-radio-group' },
+                            { cmp: 'pl-radio-button', label: 'pl-radio-button' },
+                            { cmp: 'pl-textarea', label: 'pl-textarea' }
+                        ]
+                    },
+                    {
+                        title: 'Кнопки',
+                        items: [
+                            { cmp: 'pl-button', label: 'pl-button' },
+                            { cmp: 'pl-icon-button', label: 'pl-icon-button' }
+                        ]
+                    },
+                    {
+                        title: 'Лэйаут',
+                        items: [
+                            { cmp: 'pl-flex-layout', label: 'pl-flex-layout' },
+                            { cmp: 'pl-grid', label: 'pl-grid' },
+                            { cmp: 'pl-grid-column', label: 'pl-grid-column' },
+                            { cmp: 'pl-tabpanel', label: 'pl-tabpanel' },
+                            { cmp: 'pl-tab', label: 'pl-tab' }
+                        ]
+                    },
+                    {
+                        title: 'Данные',
+                        items: [
+                            { cmp: 'pl-dataset', label: 'pl-dataset' },
+                            { cmp: 'pl-action', label: 'pl-action' },
+                            { cmp: 'pl-data-observer', label: 'pl-data-observer' },
+                            { cmp: 'pl-valid-observer', label: 'pl-valid-observer' }
+                        ]
+                    },
+                    {
+                        title: 'Прочее',
+                        items: [
+                            { cmp: 'pl-icon', label: 'pl-icon' },
+                            { cmp: 'pl-badge', label: 'pl-badge' }
+                        ]
+                    }
+                ])
+            }
+        };
+    }
+
     static get css() {
 		return css`
 			:host {
-				display: block;
+				display: flex;
+                flex-direction: column;
 				width: 100%;
-				overflow: auto;
+				overflow: hidden;
                 position: relative;
+                background: var(--pl-background-color);
 			}
 
-            .header {
-                color: var(--black-darkest);
-                font-size: 18px;
-                font-weight: 500;
+            .head {
                 position: sticky;
                 top: 0;
-                left:0;
-                height: 24px;
-                width: 100%;
-                background: white;
+                z-index: 2;
+                padding: 8px;
+                border-bottom: 1px solid var(--pl-grey-light);
+                background: var(--pl-background-color);
+            }
+
+            .title {
+                font: var(--pl-header-font);
+                color: var(--pl-header-color);
+            }
+
+            .subtitle {
+                margin-top: 4px;
+                font: var(--pl-text-font);
+                color: var(--pl-grey-darkest);
+            }
+
+            .content {
+                overflow: auto;
+                padding: 8px;
+            }
+
+            .group + .group {
+                margin-top: 10px;
+            }
+
+            .group-title {
+                font: var(--pl-header-font);
+                color: var(--pl-header-color);
+                margin-bottom: 6px;
+            }
+
+            .items {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+
+            .item {
+                display: inline-flex;
+                align-items: center;
+                min-height: 26px;
+                padding: 4px 8px;
+                border: 1px solid var(--pl-grey-light);
+                border-radius: var(--pl-border-radius);
+                background: var(--pl-grey-lightest);
+                font: var(--pl-text-font);
+                color: var(--pl-grey-darkest);
+                cursor: grab;
                 user-select: none;
-                padding: 0 8px;
+            }
+
+            .item:hover {
+                border-color: var(--pl-primary-base);
+                color: var(--pl-primary-base);
+                background: var(--pl-background-color);
+            }
+
+            .item:active {
+                cursor: grabbing;
             }
     	`;
 	}
     static get template() {
         return html`
-            <div id="elements">
-                <div class="header">Inputs</div>
-                <div cmp="pl-input">pl-input</div>
-                <div cmp="pl-input-mask">pl-input-mask</div>
-                <div cmp="pl-combobox">pl-combobox</div>
-                <div cmp="pl-datetime">pl-datetime</div>
-                <div cmp="pl-checkbox">pl-checkbox</div>
-                <div cmp="pl-radio-group">pl-radio-group</div>
-                <div cmp="pl-radio-button">pl-radio-button</div>
-                <div cmp="pl-input">pl-textarea</div>
-                <div class="header">Buttons</div>
-                <div cmp="pl-button">pl-button</div>
-                <div cmp="pl-icon-button">pl-icon-button</div>
-                <div class="header">Layout</div>
-                <div cmp="pl-flex-layout">pl-flex-layout</div>
-                <div cmp="pl-grid">pl-grid</div>
-                <div cmp="pl-grid-column">pl-grid-column</div>
-                <div cmp="pl-tabpanel">pl-tabpanel</div>
-                <div cmp="pl-tab">pl-tab</div>
-                <div class="header">Data manipulation</div>
-                <div cmp="pl-dataset">pl-dataset</div>
-                <div cmp="pl-action">pl-action</div>
-                <div cmp="pl-data-observer">pl-data-observer</div>
-                <div cmp="pl-valid-observer">pl-valid-observer</div>
-                <div class="header">Misc</div>
-                <div cmp="pl-icon">pl-icon</div>
-                <div cmp="pl-icon">pl-badge</div>
+            <div class="head">
+                <div class="title">Компоненты</div>
+                <div class="subtitle">Перетащите компонент на форму</div>
+            </div>
+            <div class="content">
+                <template d:repeat="{{groups}}" d:as="group">
+                    <div class="group">
+                        <div class="group-title">[[group.title]]</div>
+                        <div class="items">
+                            <template d:repeat="{{group.items}}" d:as="cmpItem">
+                                <div class="item" cmp="[[cmpItem.cmp]]" title="Перетащить [[cmpItem.label]]">[[cmpItem.label]]</div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
             </div>
         `;
     }
     connectedCallback(){
         super.connectedCallback();
-        let els = this.shadowRoot.querySelectorAll('#elements *');
+        let els = this.shadowRoot.querySelectorAll('.item[cmp]');
         [...els].forEach(el => {
             el.draggable = true;
             el.ondragstart = (e) => {
 
-                let cmp = e.target.getAttribute('cmp');
+                let cmp = e.target?.closest?.('.item')?.getAttribute('cmp');
+                if (!cmp) return;
                 e.dataTransfer.setData('dev/element', cmp);
                 if (!customElements.get(cmp)) {
                     customLoader(cmp);
