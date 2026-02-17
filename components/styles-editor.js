@@ -27,9 +27,13 @@ class PlStylesEditor extends PlElement {
         super();
         this._previewStyle = null;
         this._skipObserver = false;
+        this._searchMarkerId = null;
+        this._searchMarkerTimer = 0;
+        this._searchMarkerStyleReady = false;
     }
 
     disconnectedCallback() {
+        this._clearSearchMarker();
         this._removePreviewStyle();
         super.disconnectedCallback();
     }
@@ -39,9 +43,15 @@ class PlStylesEditor extends PlElement {
     }
 
     openForClassToken(classToken, form) {
+        const token = String(classToken || '').trim();
+        if (!token) return;
+        this.openForSelector(`.${token}`, form);
+    }
+
+    openForSelector(selector, form) {
         if (form) this.form = form;
         this.$.drawer.opened = true;
-        this._scrollToClassToken(classToken);
+        this._scrollToSelector(selector);
     }
 
     _setStylesText(value) {
@@ -104,17 +114,15 @@ class PlStylesEditor extends PlElement {
         this._previewStyle = null;
     }
 
-    _scrollToClassToken(classToken) {
-        const token = String(classToken || '').trim();
-        if (!token) return;
+    _scrollToSelector(selectorInput) {
+        const selector = String(selectorInput || '').trim();
+        if (!selector) return;
         const text = String(this.stylesText || '');
         if (!text) return;
 
-        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const regex = new RegExp(`\\.${escaped}(?![\\w-])`);
-        const match = regex.exec(text);
-        if (!match) return;
-        const index = match.index;
+        const index = text.indexOf(selector);
+        if (index < 0) return;
+        const matchLength = selector.length;
         const before = text.slice(0, index);
         const row = before.split('\n').length;
         const col = index - (before.lastIndexOf('\n') + 1) + 1;
@@ -124,6 +132,7 @@ class PlStylesEditor extends PlElement {
             if (!editor?.gotoLine) return false;
             editor.gotoLine(row, col, true);
             editor.scrollToLine(row, true, true, () => {});
+            this._highlightFoundSelector(editor, row - 1, col - 1, matchLength);
             editor.focus();
             return true;
         };
@@ -135,6 +144,67 @@ class PlStylesEditor extends PlElement {
             if (attempts < 12) requestAnimationFrame(tryReveal);
         };
         requestAnimationFrame(tryReveal);
+    }
+
+    _highlightFoundSelector(editor, row, col, length) {
+        if (!editor?.session) return;
+        this._clearSearchMarker();
+        this._ensureSearchMarkerStyle();
+
+        const aceApi = globalThis.ace;
+        const RangeCtor = aceApi?.require?.("ace/range")?.Range;
+        if (typeof RangeCtor !== "function") return;
+
+        const startCol = Math.max(0, Number(col) || 0);
+        const endCol = Math.max(startCol + 1, startCol + (Number(length) || 1));
+        const range = new RangeCtor(Math.max(0, Number(row) || 0), startCol, Math.max(0, Number(row) || 0), endCol);
+        this._searchMarkerId = editor.session.addMarker(range, "nf-dev-editor-css-target-marker", "text", false);
+
+        this._searchMarkerTimer = setTimeout(() => {
+            this._clearSearchMarker(editor);
+        }, 2000);
+    }
+
+    _clearSearchMarker(editorRef) {
+        if (this._searchMarkerTimer) {
+            clearTimeout(this._searchMarkerTimer);
+            this._searchMarkerTimer = 0;
+        }
+        const editor = editorRef || this.$.codeeditor?.editor;
+        if (!editor?.session) {
+            this._searchMarkerId = null;
+            return;
+        }
+        if (this._searchMarkerId !== null && this._searchMarkerId !== undefined) {
+            try {
+                editor.session.removeMarker(this._searchMarkerId);
+            } catch (_err) {
+                // ignore marker remove errors
+            }
+            this._searchMarkerId = null;
+        }
+    }
+
+    _ensureSearchMarkerStyle() {
+        if (this._searchMarkerStyleReady) return;
+        const hostRoot = this.$.codeeditor?.shadowRoot;
+        if (!hostRoot) return;
+        if (hostRoot.querySelector("style[data-dev-editor-css-marker]")) {
+            this._searchMarkerStyleReady = true;
+            return;
+        }
+        const style = document.createElement("style");
+        style.setAttribute("data-dev-editor-css-marker", "1");
+        style.textContent = `
+            .ace_marker-layer .nf-dev-editor-css-target-marker {
+                position: absolute;
+                background: rgba(33, 140, 130, 0.22);
+                border-bottom: 2px solid var(--pl-primary-color);
+                border-radius: 2px;
+            }
+        `;
+        hostRoot.appendChild(style);
+        this._searchMarkerStyleReady = true;
     }
 }
 

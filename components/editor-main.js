@@ -175,6 +175,7 @@ class EditorMain extends PlElement {
         this._ensurePlComponentsLoaded();
         window.addEventListener('select-component', e => this.onSelectComponent(e));
         window.addEventListener('command', e => this.onCommand(e));
+        window.addEventListener('nf-dev-editor-open-css-rule', e => this.onOpenCssRule(e));
         window.addEventListener('form-update', e => this.onFormUpdate(e));
         window.addEventListener('form-change', e => this.onCurrentFormChange(e));
         let onResize = debounce( ()=>domSelector.drawSelector(this.selected), 100 );
@@ -257,9 +258,9 @@ class EditorMain extends PlElement {
     }
 
     onOpenCssRule(event) {
-        const token = String(event?.detail?.token || '').trim();
-        if (!token) return;
-        this.$.stylesEditor.openForClassToken(token, this.editForm);
+        const selector = String(event?.detail?.selector || '').trim();
+        if (!selector) return;
+        this.$.stylesEditor.openForSelector(selector, this.editForm);
     }
 
     copySelectedPath() {

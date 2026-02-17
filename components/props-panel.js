@@ -30,9 +30,9 @@ class PropsPanel extends PlElement {
             panelDescription: { type: String, value: 'Выберите элемент на форме для редактирования свойств.' },
             activeTab: { type: String, value: 'properties' },
             hasSelectedElement: { type: Boolean, value: false },
-            classValue: { type: String, value: '', observer: '_classValueObserver' },
             classDraft: { type: String, value: '' },
             classTokens: { type: Array, value: () => [] },
+            classBindingValue: { type: String, value: '' },
             cssRuleItems: { type: Array, value: () => [] },
             eventItems: { type: Array, value: () => [], observer: '_eventItemsObserver' }
         }
@@ -229,11 +229,6 @@ class PropsPanel extends PlElement {
                 gap: 4px;
             }
 
-            .class-token-label {
-                cursor: pointer;
-                user-select: none;
-            }
-
             .class-editor-row {
                 display: flex;
                 gap: 8px;
@@ -403,50 +398,46 @@ class PropsPanel extends PlElement {
             <div hidden$="[[!_isTab(activeTab,'classes')]]">
                 <section class="group" hidden$="[[!hasSelectedElement]]">
                     <div class="group-head">
-                        <div class="group-title">Классы</div>
-                        <div class="group-description">Классы элемента. Изменения применяются сразу в рантайме.</div>
+                        <div class="group-title">Применённые CSS-правила</div>
+                        <div class="group-description">Селекторы, которые реально матчятся для выбранного элемента. Здесь же можно добавить класс.</div>
                     </div>
                     <div class="group-body">
-                        <div class="prop-item">
-                            <div class="prop-meta">
-                                <div class="prop-label">Class</div>
-                                <div class="prop-name">class</div>
+                        <div class="meta-row" hidden$="[[!classBindingValue]]">
+                            <div class="meta-row-head">
+                                <div class="meta-row-name">class</div>
+                                <div class="meta-row-kind">binding</div>
                             </div>
-                            <pl-input
-                                value="{{classValue}}"
-                                placeholder="Например: card highlighted"
-                                stretch></pl-input>
+                            <div class="meta-row-value">[[classBindingValue]]</div>
+                        </div>
+
+                        <div class="prop-item" hidden$="[[classBindingValue]]">
                             <div class="class-editor-row">
                                 <pl-input value="{{classDraft}}" placeholder="Добавить класс" stretch></pl-input>
-                                <pl-button variant="ghost" label="+класс" on-click="[[onAddClassTokenClick]]"></pl-button>
+                                <pl-button variant="ghost" label="Добавить класс" on-click="[[onAddClassTokenClick]]"></pl-button>
                             </div>
                             <div class="class-token-list" hidden$="[[_isEmpty(classTokens)]]">
                                 <template d:repeat="{{classTokens}}">
                                     <span class="class-token">
-                                        <span class="class-token-label" data-token$="[[item]]" on-click="[[onClassTokenClick]]">[[item]]</span>
-                                        <pl-button class="class-token-remove" variant="link" label="×" data-token$="[[item]]" on-click="[[onRemoveClassTokenClick]]"></pl-button>
+                                        <span>[[item]]</span>
+                                        <pl-button class="class-token-remove" variant="link" label="×" data-token="[[item]]" on-click="[[onRemoveClassTokenClick]]"></pl-button>
                                     </span>
                                 </template>
                             </div>
                         </div>
-                    </div>
-                </section>
 
-                <section class="group" hidden$="[[_isEmpty(cssRuleItems)]]">
-                    <div class="group-head">
-                        <div class="group-title">Применённые CSS-правила</div>
-                        <div class="group-description">Селекторы, которые реально матчятся для выбранного элемента.</div>
-                    </div>
-                    <div class="group-body">
                         <template d:repeat="{{cssRuleItems}}">
                             <div class="meta-row">
                                 <div class="meta-row-head">
-                                    <div class="meta-row-name">[[item.selector]]</div>
+                                    <pl-button class="meta-row-name" variant="link" label="[[item.selector]]" data-selector="[[item.selector]]" on-click="[[onCssRuleClick]]"></pl-button>
                                     <div class="meta-row-kind">[[item.origin]]</div>
                                 </div>
                                 <div class="meta-row-value">[[item.declarations]]</div>
                             </div>
                         </template>
+
+                        <div class="meta-row" hidden$="[[!_isEmpty(cssRuleItems)]]">
+                            <div class="meta-row-value">Для этого элемента пока нет совпавших CSS-правил.</div>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -462,9 +453,9 @@ class PropsPanel extends PlElement {
                             <div class="prop-item">
                                 <div class="event-row-head">
                                     <div class="prop-label">[[item.label]]</div>
-                                    <div class="event-row-controls">
-                                        <div class="prop-name">[[item.name]]</div>
-                                        <pl-button class="class-token-remove" variant="link" label="×" data-event$="[[item.name]]" on-click="[[onRemoveEventClick]]"></pl-button>
+                                        <div class="event-row-controls">
+                                            <div class="prop-name">[[item.name]]</div>
+                                        <pl-button class="class-token-remove" variant="link" label="×" data-event="[[item.name]]" on-click="[[onRemoveEventClick]]"></pl-button>
                                     </div>
                                 </div>
                                 <pl-input value="{{item.value}}" placeholder="Например onClick" stretch></pl-input>
@@ -482,7 +473,6 @@ class PropsPanel extends PlElement {
     constructor() {
         super();
         this._css = new Css();
-        this._suppressClassObserver = false;
         this._cssRulesFrame = 0;
     }
 
@@ -504,7 +494,7 @@ class PropsPanel extends PlElement {
             this.bindItems = this._collectBindItems(activeNode, this.data);
             this.eventItems = this._collectEventItems(activeNode);
             this.hasSelectedElement = activeNode instanceof Element;
-            this._setClassValueFromNode(activeNode);
+            this._setClassTokensFromNode(activeNode);
             this._setCssRulesFromNode(domNode || activeNode);
             this.classDraft = '';
         } else {
@@ -514,9 +504,9 @@ class PropsPanel extends PlElement {
             this.selectedTag = '';
             this.selectedSourcePath = '';
             this.hasSelectedElement = false;
-            this._setClassValueSilently('');
             this.classDraft = '';
             this.classTokens = [];
+            this.classBindingValue = '';
             this.cssRuleItems = [];
         }
         this._syncPanelMeta();
@@ -660,6 +650,13 @@ class PropsPanel extends PlElement {
 
         if (item.kind === 'attribute') {
             this.changeAttribute(item.name, item.value ?? '');
+            if (item.name === 'class') {
+                const nextClassValue = String(item.value ?? '').trim();
+                const hasBinding = this._isBindExpression(nextClassValue);
+                this.classBindingValue = hasBinding ? nextClassValue : '';
+                this.classTokens = hasBinding ? [] : this._classTokens(nextClassValue);
+                this._scheduleCssRulesRefresh();
+            }
             return;
         }
         if (item.kind === 'text') {
@@ -715,83 +712,91 @@ class PropsPanel extends PlElement {
     }
 
     onAddClassTokenClick() {
+        if (this.classBindingValue) return;
         const draft = String(this.classDraft || '').trim();
         if (!draft) return;
         const additions = draft.split(/\s+/).filter(Boolean);
         if (!additions.length) return;
         const next = Array.from(new Set([...(this.classTokens || []), ...additions]));
-        this.classValue = next.join(' ');
+        this._applyClassTokens(next);
         this.classDraft = '';
     }
 
     onRemoveClassTokenClick(event) {
+        if (this.classBindingValue) return;
         event?.stopPropagation?.();
-        const token = String(event?.currentTarget?.dataset?.token || '').trim();
+        const token = String(
+            event?.currentTarget?.dataset?.token
+            || event?.currentTarget?.getAttribute?.('data-token')
+            || event?.model?.item
+            || event?.detail?.item
+            || ''
+        ).trim();
         if (!token) return;
         const next = (this.classTokens || []).filter((item) => item !== token);
-        this.classValue = next.join(' ');
+        this._applyClassTokens(next);
     }
 
-    onClassTokenClick(event) {
-        const token = String(event?.currentTarget?.dataset?.token || '').trim();
-        if (!token || this._isBindExpression(token)) return;
+    onCssRuleClick(event) {
+        const selector = String(
+            event?.currentTarget?.dataset?.selector
+            || event?.currentTarget?.getAttribute?.('data-selector')
+            || event?.model?.item?.selector
+            || event?.detail?.item?.selector
+            || event?.currentTarget?.label
+            || event?.currentTarget?.textContent
+            || ''
+        ).trim();
+        if (!selector) return;
+        const detail = { selector };
         this.dispatchEvent(new CustomEvent('open-css-rule', {
-            detail: {
-                token,
-                selector: `.${token}`
-            },
+            detail,
             bubbles: true,
             composed: true
         }));
+        window.dispatchEvent(new CustomEvent('nf-dev-editor-open-css-rule', { detail }));
     }
 
     onRemoveEventClick(event) {
-        const attrName = String(event?.currentTarget?.dataset?.event || '').trim();
+        const attrName = String(
+            event?.currentTarget?.dataset?.event
+            || event?.currentTarget?.getAttribute?.('data-event')
+            || event?.model?.item?.name
+            || event?.detail?.item?.name
+            || ''
+        ).trim();
         if (!attrName) return;
         const next = (this.eventItems || []).filter((item) => item?.name !== attrName);
         this.eventItems = next;
         this.changeAttribute(attrName, '');
     }
 
-    _classValueObserver(value) {
-        if (this._suppressClassObserver) return;
-        if (!this.selected) return;
-        const normalized = this._normalizeClassValue(value);
-        if (normalized !== String(value ?? '')) this._setClassValueSilently(normalized);
-        this.classTokens = this._classTokens(normalized);
-        this.changeAttribute('class', normalized);
-        this._scheduleCssRulesRefresh();
-    }
-
-    _setClassValueFromNode(node) {
-        if (!(node instanceof Element)) {
-            this._setClassValueSilently('');
-            this.classTokens = [];
-            return;
-        }
-        const classValue = String(node.getAttribute('class') ?? '');
-        this._setClassValueSilently(classValue);
-        this.classTokens = this._classTokens(classValue);
-    }
-
-    _setClassValueSilently(value) {
-        this._suppressClassObserver = true;
-        this.classValue = value;
-        this._suppressClassObserver = false;
-    }
-
-    _normalizeClassValue(value) {
-        const text = String(value ?? '').trim();
-        if (!text) return '';
-        if (this._isBindExpression(text)) return text;
-        return Array.from(new Set(text.split(/\s+/).filter(Boolean))).join(' ');
-    }
-
     _classTokens(value) {
         const text = String(value ?? '').trim();
         if (!text) return [];
-        if (this._isBindExpression(text)) return [text];
         return text.split(/\s+/).filter(Boolean);
+    }
+
+    _setClassTokensFromNode(node) {
+        if (!(node instanceof Element)) {
+            this.classTokens = [];
+            this.classBindingValue = '';
+            return;
+        }
+        const classValue = String(node.getAttribute('class') ?? '').trim();
+        const hasBinding = this._isBindExpression(classValue);
+        this.classBindingValue = hasBinding ? classValue : '';
+        this.classTokens = hasBinding ? [] : this._classTokens(classValue);
+    }
+
+    _applyClassTokens(tokens) {
+        if (this.classBindingValue) return;
+        const next = Array.from(new Set((Array.isArray(tokens) ? tokens : [])
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)));
+        this.classTokens = next;
+        this.changeAttribute('class', next.join(' '));
+        this._scheduleCssRulesRefresh();
     }
 
     _isBindExpression(value) {
@@ -862,10 +867,21 @@ class PropsPanel extends PlElement {
         const normalizeAttrToProp = (name) => toCamel(String(name || '').replace(/\$$/, ''));
 
         [...tplNode.attributes].forEach((attr) => {
-            if (attr.name === 'class' || attr.name.startsWith('on-')) return;
+            const attrName = String(attr?.name || '');
+            if (attrName.startsWith('on-')) return;
+            const value = attr.value ?? '';
+            if (attrName === 'class') {
+                if (this._isBindExpression(value)) {
+                    result.push({
+                        kind: 'attribute',
+                        name: attrName,
+                        value
+                    });
+                }
+                return;
+            }
             const propLikeName = normalizeAttrToProp(attr.name);
             if (configuredProps.has(propLikeName)) return;
-            const value = attr.value ?? '';
             result.push({
                 kind: 'attribute',
                 name: attr.name,
@@ -947,6 +963,7 @@ class PropsPanel extends PlElement {
         list.forEach((prop) => valuesMap.set(prop?.name, prop?.value));
 
         list.forEach((prop) => {
+            if (this._isClassProp(prop)) return;
             if (!this._isPropertyVisible(prop, valuesMap)) return;
             const groupId = prop.groupId || 'common';
             if (!map.has(groupId)) {
@@ -982,6 +999,10 @@ class PropsPanel extends PlElement {
         });
 
         this.groups = groups;
+    }
+
+    _isClassProp(prop) {
+        return String(prop?.name || '').trim() === 'class';
     }
 
     _isPropertyVisible(prop, valuesMap) {
