@@ -62,22 +62,12 @@ class TreeList extends PlElement {
 				text-overflow: ellipsis;
 				white-space: nowrap;
 			}
-
-			.copy-btn {
-				opacity: .45;
-				transition: opacity .12s ease;
-			}
-
-			.cell:hover .copy-btn,
-			.row[active] .copy-btn {
-				opacity: 1;
-			}
     	`;
 
 	static template = html`
 		<div class="tree-toolbar">
 			<div class="tree-toolbar-title">Структура</div>
-			<pl-icon-button variant="ghost" size="14" iconset="pl-default" icon="copy" title="Скопировать путь выбранного элемента" disabled$="[[!selected]]" on-click="[[onCopySelectedPathClick]]"></pl-icon-button>
+			<pl-icon-button variant="ghost" size="14" iconset="pl-editor" icon="path-copy" title="Вывести путь выбранного элемента в консоль" on-click="[[onCopySelectedPathClick]]"></pl-icon-button>
 		</div>
 		<pl-grid tree data="{{data}}" selected="{{_selectedNode}}" on-row-click="[[onSelect]]" key-field="id"
 			pkey-field="parent_id">
@@ -93,64 +83,72 @@ class TreeList extends PlElement {
 
 	constructor() {
 		super();
-		drndr.listen(this, 'dev/element', this.over, this.leave, this.drop);
-		addEventListener('form-update', e => this.onFormUpdate(e));
+		drndr.listen(this, this.over, this.leave, this.drop, this);
+		this._onFormUpdateBound = this.onFormUpdate.bind(this);
+		window.addEventListener('form-update', this._onFormUpdateBound);
 		if (this.inspect) this._inspectedChange(this.inspect)
 	}
 
 	connectedCallback() {
 		super.connectedCallback();
-		this.ondragstart = e => {
-			let node = e.composedPath()[0].closest('.cell');
-			let model = getModelByDom(node);
-			if (model) {
-				let path = model.row.path || getXPath(model.row.node);
-				//TODO: create image for drug preview
-				let img = document.createElement('img');
-				e.dataTransfer.setDragImage(img, 0, 0)
-				e.dataTransfer.dropEffect = 'move';
-				e.dataTransfer.setData('dev/move', path);
-			}
-		}
+		if (!this._onTreeDragStartBound) this._onTreeDragStartBound = this._onTreeDragStart.bind(this);
+		this.addEventListener('dragstart', this._onTreeDragStartBound, true);
+	}
+
+	disconnectedCallback() {
+		window.removeEventListener('form-update', this._onFormUpdateBound);
+		this.removeEventListener('dragstart', this._onTreeDragStartBound, true);
+		super.disconnectedCallback();
+	}
+
+	_onTreeDragStart(e) {
+		let node = e?.composedPath?.()?.[0]?.closest?.('.cell');
+		let model = this._extractRowModel(getModelByDom(node));
+		if (!model || !e?.dataTransfer) return;
+		let path = model.path || getXPath(model.node);
+		let sourcePath = model.sourcePath || model.templatePath || path;
+		this._dragSourcePath = sourcePath;
+		let img = document.createElement('img');
+		e.dataTransfer.setDragImage(img, 0, 0)
+		e.dataTransfer.dropEffect = 'move';
+		e.dataTransfer.setData('dev/move', path);
+		e.dataTransfer.setData('dev/move-source', sourcePath);
+		e.dataTransfer.setData('text/plain', `dev:move:${path}`);
 	}
 
 	over(e) {
-		let node = e.composedPath()[0].closest('.cell');
-		if (node) {
-			let model = getModelByDom(node);
-			if (model) {
-				//domSelector.drawSelector(model.row.target);
-				let path = model.row.path || getXPath(model.row.node);
-				this.dispatchEvent(new CustomEvent('highlight', { detail: { path, position: e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in') } }));
-				e.preventDefault();
-			};
-		}
+		if (!this._hasDragPayload(e)) return;
+		let path = this._resolveDropTargetPath(e);
+		if (!path) return;
+		this._lastDropPath = path;
+		this.dispatchEvent(new CustomEvent('highlight', { detail: { path, position: this._getDropPosition(e) } }));
+		e.preventDefault();
+		return true;
 	}
 	leave(e) {
 		this.dispatchEvent(new CustomEvent('highlight', { detail: { path: null } }));
 	}
 	drop(e) {
-		let node = e.composedPath()[0].closest('.cell');
-		if (node) {
-			let model = getModelByDom(node);
-			let move = e.dataTransfer.getData('dev/move');
-			let element = e.dataTransfer.getData('dev/element');
-				if (model) {
-					//domSelector.drawSelector(model.row.target);
-					let path = model.row.path || getXPath(model.row.node);
-					let cmd = {
-						position: e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in'),
-						path,
-						element
-					}
-				if (move) {
-					cmd.element = move;
-					dispatchEvent(new CustomEvent('command', { detail: new MoveElementCommand(cmd) }));
-				} else {
-					dispatchEvent(new CustomEvent('command', { detail: new AddElementCommand(cmd) }));
-				}
-			}
+		const payload = this._extractDragPayload(e);
+		if (!payload) return;
+		let path = this._resolveDropTargetPath(e) || this._lastDropPath || '';
+		if (!path) return;
+		const position = this._getDropPosition(e);
+		let cmd = {
+			position,
+			path,
+			sourcePath: path,
+			element: payload.value
 		}
+		if (payload.kind === 'move') {
+			const sourceElement = payload.source || this._dragSourcePath || this.selected || payload.value;
+			cmd.sourceElement = sourceElement;
+			dispatchEvent(new CustomEvent('command', { detail: new MoveElementCommand(cmd) }));
+		} else {
+			dispatchEvent(new CustomEvent('command', { detail: new AddElementCommand(cmd) }));
+		}
+		this._dragSourcePath = '';
+		e.preventDefault();
 	}
 	_inspectedChange(inspect) {
 		setTimeout(() => {
@@ -226,58 +224,137 @@ class TreeList extends PlElement {
 	}
 
 	onSelect(item) {
-		let model = item.detail.model;
-		let node = model.node;
-		let path = model.path || getXPath(node)
+		let model = this._extractRowModel(item?.detail?.model) || item?.detail?.model;
+		let node = model?.node;
+		let path = model?.path || (node ? getXPath(node) : '');
+		if (!path) return;
+		console.log('[nf-dev-editor][tree-list][select]', {
+			path,
+			nodeTag: String(node?.localName || ''),
+			modelKeys: Object.keys(model || {})
+		});
 		window.dispatchEvent(new CustomEvent('select-component', {
 			detail: {
-				path
+				path,
+				templatePath: path,
+				source: 'tree'
 			}
 		}))
-	}
-
-	onCopyPathClick(e) {
-		e?.stopPropagation?.();
-		e?.preventDefault?.();
-		const row = e?.model?.row;
-		const path = row?.path || (row?.node ? getXPath(row.node) : '');
-		if (!path) return;
-		this._copyText(path);
 	}
 
 	onCopySelectedPathClick(e) {
 		e?.stopPropagation?.();
 		e?.preventDefault?.();
-		const path = this.selected || this._selectedNode?.path || '';
+		const path = this._resolveSelectedPath();
 		if (!path) return;
-		this._copyText(path);
+		if (navigator?.clipboard?.writeText) {
+			navigator.clipboard.writeText(path).catch(() => {});
+		}
 	}
 
-	_copyText(text) {
-		const value = String(text || '');
-		if (!value) return;
-		const clipboard = globalThis?.navigator?.clipboard;
-		if (clipboard?.writeText) {
-			clipboard.writeText(value).catch(() => this._legacyCopy(value));
-			return;
-		}
-		this._legacyCopy(value);
+	_resolveSelectedPath() {
+		if (this.selected) return this.selected;
+		if (this._selectedNode?.path) return this._selectedNode.path;
+		const activeRow = this.renderRoot?.querySelector?.('.row[active]');
+		const activeModel = getModelByDom(activeRow);
+		if (activeModel?.path) return activeModel.path;
+		if (activeModel?.row?.path) return activeModel.row.path;
+		return '';
 	}
 
-	_legacyCopy(text) {
-		const ta = document.createElement('textarea');
-		ta.value = text;
-		ta.setAttribute('readonly', '');
-		ta.style.position = 'fixed';
-		ta.style.opacity = '0';
-		document.body.appendChild(ta);
-		ta.select();
-		try {
-			document.execCommand('copy');
-		} catch (_err) {
-			// ignore
+	_resolveModelFromEvent(e) {
+		const path = e?.composedPath?.() || [];
+		for (const node of path) {
+			if (!node || typeof node !== 'object') continue;
+			const model = this._extractRowModel(getModelByDom(node));
+			if (model) return { row: model };
 		}
-		ta.remove();
+		const firstElement = path.find((node) => node?.closest);
+		if (firstElement?.closest) {
+			const rowEl = firstElement.closest('.row');
+			const rowModel = this._extractRowModel(getModelByDom(rowEl));
+			if (rowModel) return { row: rowModel };
+			const cell = firstElement.closest('.cell');
+			const model = this._extractRowModel(getModelByDom(cell));
+			if (model) return { row: model };
+		}
+		if (this._selectedNode?.path) {
+			return { row: this._selectedNode };
+		}
+		return null;
+	}
+
+	_extractRowModel(model) {
+		if (!model || typeof model !== 'object') return null;
+		if (model.row && typeof model.row === 'object') return model.row;
+		for (const value of Object.values(model)) {
+			if (!value || typeof value !== 'object') continue;
+			if ('path' in value || 'node' in value) return value;
+		}
+		return null;
+	}
+
+	_resolveDropTargetPath(e) {
+		const model = this._resolveModelFromEvent(e);
+		if (model?.row?.path) return model.row.path;
+		if (model?.row?.node) return getXPath(model.row.node);
+		if (this._selectedNode?.path) return this._selectedNode.path;
+		if (Array.isArray(this.data) && this.data.length > 0) return this.data[0]?.path || '';
+		return '';
+	}
+
+	_getDropPosition(e) {
+		if (e?.ctrlKey) return 'after';
+		if (e?.shiftKey) return 'before';
+		const model = this._resolveModelFromEvent(e);
+		if (String(model?.row?.node?.localName || '').toLowerCase() === 'template') {
+			return 'in';
+		}
+
+		const rowEl = (e?.composedPath?.() || []).find((node) => node?.classList?.contains?.('row'));
+		const rect = rowEl?.getBoundingClientRect?.();
+		if (!rect) return 'in';
+
+		const y = Number(e?.clientY);
+		if (!Number.isFinite(y)) return 'in';
+
+		const beforeZone = Math.min(12, Math.max(4, rect.height * 0.3));
+		return y <= rect.top + beforeZone ? 'before' : 'in';
+	}
+
+	_extractDragPayload(e) {
+		let move = String(e?.dataTransfer?.getData?.('dev/move') || '').trim();
+		let moveSource = String(e?.dataTransfer?.getData?.('dev/move-source') || '').trim();
+		let element = String(e?.dataTransfer?.getData?.('dev/element') || '').trim();
+		const plain = String(e?.dataTransfer?.getData?.('text/plain') || '').trim();
+
+		if (!move && plain.startsWith('dev:move:')) {
+			move = plain.replace('dev:move:', '').trim();
+		}
+		if (!element && plain.startsWith('dev:element:')) {
+			element = plain.replace('dev:element:', '').trim();
+		}
+		if (!move && !element && this._isValidElementName(plain)) {
+			element = plain;
+		}
+
+		if (move) return { kind: 'move', value: move, source: moveSource || '' };
+		if (this._isValidElementName(element)) return { kind: 'add', value: element };
+		return null;
+	}
+
+	_hasDragPayload(e) {
+		const types = [...(e?.dataTransfer?.types || [])].map((t) => String(t).toLowerCase());
+		if (types.includes('dev/element') || types.includes('dev/move') || types.includes('text/plain')) {
+			return true;
+		}
+		const payload = this._extractDragPayload(e);
+		return Boolean(payload);
+	}
+
+	_isValidElementName(name) {
+		const value = String(name || '').trim().toLowerCase();
+		return /^[a-z][a-z0-9._-]*-[a-z0-9._-]+$/.test(value);
 	}
 }
 

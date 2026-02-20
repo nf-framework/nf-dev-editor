@@ -1,4 +1,4 @@
-import { css, html, PlElement } from "polylib";
+import { css, html, PlElement, Template, TemplateInstance } from "polylib";
 import { setAttrValue } from "polylib/common.js";
 import { domSelector } from "../lib/domselector.js";
 import * as polylibTools from "../lib/selectors/polylib-component.js";
@@ -7,6 +7,7 @@ import {AddElementCommand, DelElementCommand, MoveElementCommand} from "../lib/c
 import drndr from "../lib/drndr.js";
 import "@plcmp/pl-flex-layout";
 import "@plcmp/pl-button";
+import "/@editor/components/editor-iconset.js";
 import "./component-list.js";
 import "./tree-list.js";
 import "./props-panel.js";
@@ -50,12 +51,15 @@ const PL_COMPONENT_MODULES = {
     "pl-virtual-scroll": "@plcmp/pl-virtual-scroll"
 };
 
+const VOID_HTML_TAGS = new Set([
+    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+    'link', 'meta', 'param', 'source', 'track', 'wbr'
+]);
+
 class EditorMain extends PlElement {
     static properties = {
             opened: { type: Boolean },
             editForm: { type: Object },
-            tree: { type: Array, value: () => [] },
-            props: { type: Array, value: () => [] },
             selected: { type: Object, observer: '_selectedChanged' },
             domRoot: { type: Object },
             tplRoot: { type: Object },
@@ -148,7 +152,6 @@ class EditorMain extends PlElement {
                     <pl-button variant="primary" on-click="[[save]]" label="Сохранить"></pl-button>
                     <pl-button variant="ghost" on-click="[[scripts]]" label="JS"></pl-button>
                     <pl-button variant="ghost" on-click="[[styles]]" label="CSS"></pl-button>
-                    <pl-button variant="ghost" on-click="[[copySelectedPath]]" disabled$="[[!selectedPath]]" label="Путь"></pl-button>
                 </pl-flex-layout>
             </div>
             <pl-tree-list inspect="[[treeRoot]]" root-label="[[formClassName]]" selected="[[selectedSourcePath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
@@ -164,41 +167,56 @@ class EditorMain extends PlElement {
     constructor() {
         super();
         this.domScope = document.querySelector('pl-app');
+        this._dndRoots = new WeakSet();
+        this._dndRootRefs = [];
         this.fwt = polylibTools;
-        this.changes = {};
         this._sourceTemplateHost = null;
         this._sourceRequestId = 0;
         this._sourceCommandLog = [];
+        this._shortcutSubscriptions = [];
+
+        this._onSelectComponentBound = this.onSelectComponent.bind(this);
+        this._onCommandBound = this.onCommand.bind(this);
+        this._onOpenCssRuleBound = this.onOpenCssRule.bind(this);
+        this._onCurrentFormChangeBound = this.onCurrentFormChange.bind(this);
+        this._onResizeBound = debounce(() => domSelector.drawSelector(this.selected), 100);
+        this._onRootDragStartBound = this._onRootDragStart.bind(this);
+
         this._notifyFormUpdate = debounce(() => {
             window.dispatchEvent(new CustomEvent('form-update', { detail: { source: 'command' } }));
         }, 100);
         this._ensurePlComponentsLoaded();
-        window.addEventListener('select-component', e => this.onSelectComponent(e));
-        window.addEventListener('command', e => this.onCommand(e));
-        window.addEventListener('nf-dev-editor-open-css-rule', e => this.onOpenCssRule(e));
-        window.addEventListener('form-update', e => this.onFormUpdate(e));
-        window.addEventListener('form-change', e => this.onCurrentFormChange(e));
-        let onResize = debounce( ()=>domSelector.drawSelector(this.selected), 100 );
-        addEventListener('resize', onResize);
-        drndr.listen(this, 'dev/element', this.drawReceiver, this.hideReceiver, this.drop, this.domScope)
+        window.addEventListener('select-component', this._onSelectComponentBound);
+        window.addEventListener('command', this._onCommandBound);
+        window.addEventListener('nf-dev-editor-open-css-rule', this._onOpenCssRuleBound);
+        window.addEventListener('form-change', this._onCurrentFormChangeBound);
+        window.addEventListener('resize', this._onResizeBound);
+        this._attachDnDRoot(window);
+        this._attachDnDRoot(this.domScope);
 
-        document.body.classList.add('editor-opened')
-        window.plCurrentForm && this.onCurrentFormChange({ detail: window.plCurrentForm })
-        shortcut.listen(['ControlLeft+KeyS'], this.save.bind(this));
-        shortcut.listen(['MetaLeft+KeyS'], this.save.bind(this));
-        shortcut.listen(['^AltLeft'], this.select.bind(this));
-        shortcut.listen(['Delete'], this.delete.bind(this));
-        shortcut.listen(['MetaLeft+Backspace'], this.delete.bind(this));
+        document.body.classList.add('editor-opened');
+        window.plCurrentForm && this.onCurrentFormChange({ detail: window.plCurrentForm });
+        this._shortcutSubscriptions.push(
+            shortcut.listen(['ControlLeft+KeyS'], this.save.bind(this)),
+            shortcut.listen(['MetaLeft+KeyS'], this.save.bind(this)),
+            shortcut.listen(['^AltLeft'], this.select.bind(this)),
+            shortcut.listen(['Delete'], this.delete.bind(this)),
+            shortcut.listen(['MetaLeft+Backspace'], this.delete.bind(this))
+        );
+    }
 
-        this.domScope.ondragstart = e => {
-            let cp = e.composedPath();
-            let el = cp[0];
-            //TODO: create image for drug preview
-            let img = document.createElement('img');
-            e.dataTransfer.setDragImage(img,0,0)
-            e.dataTransfer.dropEffect = 'move';
-            e.dataTransfer.setData('dev/move', getXPath(el));
-        }
+    disconnectedCallback() {
+        window.removeEventListener('select-component', this._onSelectComponentBound);
+        window.removeEventListener('command', this._onCommandBound);
+        window.removeEventListener('nf-dev-editor-open-css-rule', this._onOpenCssRuleBound);
+        window.removeEventListener('form-change', this._onCurrentFormChangeBound);
+        window.removeEventListener('resize', this._onResizeBound);
+        (this._dndRootRefs || []).forEach((root) => root?.removeEventListener?.('dragstart', this._onRootDragStartBound, true));
+        this._dndRootRefs = [];
+        document.body.classList.remove('editor-opened');
+        (this._shortcutSubscriptions || []).forEach((sub) => shortcut.forget?.(sub));
+        this._shortcutSubscriptions = [];
+        super.disconnectedCallback?.();
     }
 
     select() {
@@ -215,38 +233,138 @@ class EditorMain extends PlElement {
     }
     onSelectComponent(e) {
         const detail = e?.detail || {};
-        const runtimePath = detail.runtimePath || detail.path || '';
-        const templatePath = detail.templatePath || '';
-        this.selectedPath = runtimePath;
-        this.selectedSourcePath = this._resolveSourceSelectionPath(runtimePath, templatePath);
+        const rawPath = String(detail.path || '');
+        const detailRuntimePath = String(detail.runtimePath || '');
+        const detailTemplatePath = String(detail.templatePath || '');
+        const isTemplatePath = rawPath.includes('/template');
+        const fromTree = String(detail.source || '').toLowerCase() === 'tree';
+        console.log('[nf-dev-editor][editor-main][select][input]', {
+            rawPath,
+            detailRuntimePath,
+            detailTemplatePath,
+            isTemplatePath,
+            fromTree,
+            detailTargetTag: String(detail?.target?.localName || '')
+        });
         if (this.selected) this.selected.draggable = false;
         const root = this.editForm?.root;
-        let selectedNode = detail.target || null;
+        const runtimeNodeByTemplatePath = isTemplatePath
+            ? this._resolveRuntimeNodeFromTemplatePath(rawPath)
+            : null;
+        const runtimeNodeByPath = runtimeNodeByTemplatePath
+            || (fromTree
+                ? this._resolveDomNodeByPathStrict(detailRuntimePath || rawPath)
+                : this._resolveDomNodeByPath(detailRuntimePath || rawPath));
+        let selectedNode = detail.target || runtimeNodeByPath || null;
+        console.log('[nf-dev-editor][editor-main][select][resolved-pre]', {
+            runtimeNodeByTemplatePathTag: String(runtimeNodeByTemplatePath?.localName || ''),
+            runtimeNodeByPathTag: String(runtimeNodeByPath?.localName || ''),
+            selectedNodeTag: String(selectedNode?.localName || '')
+        });
         if (root && selectedNode?.getRootNode?.() instanceof ShadowRoot && selectedNode.getRootNode() !== root) {
             selectedNode = selectedNode.getRootNode().host || selectedNode;
         }
         if (!(selectedNode instanceof Node) || (root && selectedNode !== root && !root.contains?.(selectedNode))) {
-            selectedNode = root
-                ? (findByXpath(root, this.selectedPath) || findByXpathWithFallback(root, this.selectedPath).node)
-                : null;
-        }
-        try {
-            console.log('[nf-dev-editor][editor-main][onSelectComponent]', {
-                detailPath: detail.path || null,
-                runtimePath: runtimePath || null,
-                templatePath: templatePath || null,
-                selectedSourcePath: this.selectedSourcePath || null,
-                detailTarget: detail.target?.localName || detail.target?.nodeName || null,
-                resolvedNode: selectedNode?.localName || selectedNode?.nodeName || null,
-                resolvedByFallback: detail.target !== selectedNode
+            const fallbackRuntimePath = detailRuntimePath
+                || (runtimeNodeByTemplatePath ? getXPath(runtimeNodeByTemplatePath) : '')
+                || (runtimeNodeByPath ? getXPath(runtimeNodeByPath) : '')
+                || (isTemplatePath ? (this._withNoTemplateVariant(rawPath)[0] || '') : rawPath);
+            if (fromTree) {
+                selectedNode = this._resolveDomNodeByPathStrict(fallbackRuntimePath)
+                    || (isTemplatePath ? this._resolveRuntimeNodeFromTemplatePath(rawPath) : null);
+            } else {
+                selectedNode = root
+                    ? (findByXpath(root, fallbackRuntimePath) || findByXpathWithFallback(root, fallbackRuntimePath).node)
+                    : null;
+            }
+            console.log('[nf-dev-editor][editor-main][select][fallback]', {
+                fallbackRuntimePath,
+                selectedNodeTag: String(selectedNode?.localName || '')
             });
-        } catch (_err) {
-            // ignore logging errors
         }
+        const runtimePath = selectedNode
+            ? getXPath(selectedNode)
+            : (detailRuntimePath
+                || (runtimeNodeByPath ? getXPath(runtimeNodeByPath) : '')
+                || (isTemplatePath ? (this._withNoTemplateVariant(rawPath)[0] || rawPath) : rawPath));
+        const templatePath = detailTemplatePath || (isTemplatePath ? rawPath : '');
+        const resolvedSourcePath = this._resolveSourceSelectionPath(runtimePath, templatePath)
+            || templatePath
+            || (isTemplatePath ? rawPath : runtimePath);
+
+        this.selectedPath = runtimePath;
+        this.selectedSourcePath = resolvedSourcePath;
         this.selected = selectedNode;
+        console.log('[nf-dev-editor][editor-main][select][result]', {
+            selectedPath: this.selectedPath || '',
+            selectedSourcePath: this.selectedSourcePath || '',
+            selectedTag: String(this.selected?.localName || '')
+        });
         if(this.selected) {
             this.selected.draggable = true;
         }
+    }
+
+    _resolveRuntimeNodeFromTemplatePath(sourcePath) {
+        const raw = String(sourcePath || '').trim();
+        if (!raw.includes('/template')) return null;
+        const parts = raw.split('/').filter(Boolean);
+        const templateIndex = parts.map((segment) => String(segment).toLowerCase()).lastIndexOf('template');
+        if (templateIndex < 0) return null;
+
+        const containerPath = '/' + parts.slice(0, templateIndex).join('/');
+        const innerParts = parts.slice(templateIndex + 1)
+            .map((segment) => this._parseXPathSegment(segment))
+            .filter((segment) => segment?.name);
+        console.log('[nf-dev-editor][editor-main][resolve-template][start]', {
+            sourcePath: raw,
+            containerPath,
+            innerParts: innerParts.map((part) => `${part.name}[${part.index}]`)
+        });
+
+        const containerNode = this._resolveDomNodeByPath(containerPath);
+        if (!(containerNode instanceof Node)) {
+            console.log('[nf-dev-editor][editor-main][resolve-template][container-miss]', {
+                sourcePath: raw,
+                containerPath
+            });
+            return null;
+        }
+        if (!innerParts.length) {
+            console.log('[nf-dev-editor][editor-main][resolve-template][container-hit]', {
+                sourcePath: raw,
+                containerPath,
+                containerTag: String(containerNode?.localName || '')
+            });
+            return containerNode;
+        }
+
+        let current = containerNode;
+        for (const segment of innerParts) {
+            const childNodes = [...(current?.childNodes || [])];
+            const children = childNodes.filter((child) => String(child?.localName || '').toLowerCase() === segment.name);
+            if (children.length > 0) {
+                const index = Math.min(segment.index, children.length - 1);
+                current = children[index];
+                continue;
+            }
+            const deepMatch = current?.querySelector?.(segment.name);
+            if (!deepMatch) {
+                console.log('[nf-dev-editor][editor-main][resolve-template][miss]', {
+                    sourcePath: raw,
+                    segment: `${segment.name}[${segment.index}]`,
+                    currentTag: String(current?.localName || '')
+                });
+                return null;
+            }
+            current = deepMatch;
+        }
+        console.log('[nf-dev-editor][editor-main][resolve-template][result]', {
+            sourcePath: raw,
+            runtimePath: String(getXPath(current) || ''),
+            runtimeTag: String(current?.localName || '')
+        });
+        return current instanceof Node ? current : null;
     }
 
     scripts() {
@@ -263,11 +381,6 @@ class EditorMain extends PlElement {
         this.$.stylesEditor.openForSelector(selector, this.editForm);
     }
 
-    copySelectedPath() {
-        if (!this.selectedPath) return;
-        this._copyText(this.selectedPath);
-    }
-
     onCommand(e) {
         let command = {
             ...e.detail,
@@ -275,13 +388,33 @@ class EditorMain extends PlElement {
             domRoot: this.domRoot,
             sourceTplRoot: this.sourceTplRoot
         };
+        command = this._prepareDropCommand(command);
+        if (!command) return;
+
         const sourceCommand = this._normalizeSourceCommand(command);
         if (sourceCommand) {
             this._sourceCommandLog.push(sourceCommand);
             this._applyCommandToSourceTemplate(sourceCommand);
         }
 
-        let cmdResult = this.fwt.execCommand(command);
+        const isDomMutation = ['add-element', 'move-element', 'del-element'].includes(command?.command);
+        const templateContext = String(command?.sourcePath || command?.path || '').includes('/template');
+        let cmdResult;
+        if (isDomMutation && templateContext) {
+            cmdResult = {
+                select: command.command === 'move-element'
+                    ? (command.element || command.path || '')
+                    : (command.path || '')
+            };
+            const rebuilt = this._rebuildRuntimeFromTemplate(true);
+            if (!rebuilt) {
+                requestAnimationFrame(() => {
+                    this._rebuildRuntimeFromTemplate(true);
+                });
+            }
+        } else {
+            cmdResult = this.fwt.execCommand(command);
+        }
         let select = cmdResult?.select;
         if (select) {
             const runtimePath = select;
@@ -292,14 +425,8 @@ class EditorMain extends PlElement {
                 ? (findByXpath(this.editForm.root, this.selectedPath) || findByXpathWithFallback(this.editForm.root, this.selectedPath).node)
                 : null;
         }
-        //TODO: get form name and mark changed
-        this.changes[command.form] = true;
         this._notifyFormUpdate();
         domSelector.drawSelector(this._getDrawTarget(this.selected));
-    }
-
-    onFormUpdate(e) {
-        // dispatchEvent(new CustomEvent('form-change', { detail: e.detail }));
     }
 
     onCurrentFormChange(e) {
@@ -331,6 +458,7 @@ class EditorMain extends PlElement {
             this.treeRoot = this.tplRoot;
             this.selectedSourcePath = '';
             this._sourceCommandLog = [];
+            this._attachDnDRoot(this.domRoot);
             this._setSourceTemplate(this.tplRoot?.cloneNode(true));
             this._loadBackendSource(form);
         } else {
@@ -347,7 +475,6 @@ class EditorMain extends PlElement {
             this._sourceTemplateHost = null;
             this._sourceCommandLog = [];
         }
-        //TODO: remove hack
         domSelector.root = this.domRoot;
     }
 
@@ -372,37 +499,45 @@ class EditorMain extends PlElement {
     }
 
     drawReceiver(e) {
-        let node = domSelector.findEditableNode(e.composedPath(), this.checkCanDrop);
-        let position = e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in');
+        if (!this._hasDragPayload(e)) return false;
+        let node = this._resolveDropNode(e);
+        let position = this._getDropPosition(e, node);
         if (node) {
             domSelector.drawSelector(node, { position });
             return true;
         }
     }
-
-
-    checkCanDrop(node) {
-        return true
-    }
-
-
     hideReceiver() {
         domSelector.hideSelector();
     }
 
     drop(e) {
+        if (!this._hasDragPayload(e)) return;
         const paths = e.composedPath();
-        let node = domSelector.findEditableNode(paths);
-        let path = getXPath(node);
-        let move = e.dataTransfer.getData('dev/move');
-        let element = e.dataTransfer.getData('dev/element');
+        let node = domSelector.findEditableNode(paths) || this._resolveDropNode(e);
+        if (!node) return;
+        const path = getXPath(node);
+        const payload = this._extractDragPayload(e);
+        if (!payload) return;
+        const sourcePath = this._resolveTemplatePathForRuntimeNode(node, path)
+            || this._resolveTplPath(path, '')
+            || path;
+        const moveSource = payload.kind === 'move' ? (payload.source || payload.value) : '';
+        const sourceElement = payload.kind === 'move'
+            ? (String(moveSource).includes('/template')
+                ? moveSource
+                : (this._resolveTemplatePathForRuntimePath(moveSource)
+                    || this._resolveTplPath(moveSource, '')
+                    || moveSource))
+            : '';
         let cmd = {
-            position: e.ctrlKey ? 'after' : (e.shiftKey ? 'before' : 'in'),
+            position: this._getDropPosition(e, node),
             path,
-            element
+            sourcePath,
+            element: payload.value
         }
-        if (move) {
-            cmd.element = move;
+        if (payload.kind === 'move') {
+            cmd.sourceElement = sourceElement;
             dispatchEvent(new CustomEvent('command', { detail: new MoveElementCommand(cmd) }));
         } else {
             dispatchEvent(new CustomEvent('command', { detail: new AddElementCommand(cmd) }));
@@ -490,13 +625,15 @@ class EditorMain extends PlElement {
     }
 
     _createElementForTemplate(name) {
+        if (!this._isValidElementName(name)) return null;
         const tpl = document.createElement('template');
         tpl.insertAdjacentHTML('afterbegin', `<${name}></${name}>`);
         return tpl.content.firstElementChild || tpl.firstElementChild;
     }
 
-    _appendWithPosition(node, target, position) {
+    _appendWithPosition(node, target, position, slot) {
         if (!node || !target || node === target) return;
+        this._applySlotToNode(node, slot);
         if (position === 'in') {
             const inTarget = target instanceof HTMLTemplateElement ? target.content : target;
             inTarget.appendChild(node);
@@ -509,13 +646,19 @@ class EditorMain extends PlElement {
 
     _normalizeSourceCommand(command) {
         if (command?.type !== 'dom') return null;
+        const sourcePath = command.sourcePath || command.path;
+        const sourceElement = command.command === 'move-element'
+            ? (command.sourceElement || command.element)
+            : command.sourceElement;
         return {
             type: 'dom',
             command: command.command,
-            path: command.path,
-            sourcePath: command.sourcePath,
+            path: sourcePath,
+            sourcePath,
             position: command.position,
-            element: command.element,
+            slot: command.slot,
+            element: command.command === 'move-element' ? sourceElement : command.element,
+            sourceElement,
             property: command.property,
             value: command.value,
             attribute: command.attribute,
@@ -527,24 +670,31 @@ class EditorMain extends PlElement {
         if (!host?.content || command?.type !== 'dom') return;
 
         const root = host.content;
-        const findSourceNode = (path) => {
-            const primaryPath = command.sourcePath || path;
-            let node = findByXpath(root, primaryPath, true) || findByXpathWithFallback(root, primaryPath, true).node;
-            if (!node && command.sourcePath && command.path && command.sourcePath !== command.path) {
-                node = findByXpath(root, command.path, true) || findByXpathWithFallback(root, command.path, true).node;
+        const findSourceNode = (path, preferredSourcePath) => {
+            const candidates = [];
+            if (preferredSourcePath) candidates.push(preferredSourcePath);
+            if (path && path !== preferredSourcePath) candidates.push(path);
+
+            for (const rawPath of candidates) {
+                for (const candidate of buildXPathCandidates(rawPath)) {
+                    const exact = findByXpath(root, candidate, true);
+                    if (exact) return exact;
+                    const structural = this._findTplNodeByStructure(root, candidate);
+                    if (structural) return structural;
+                }
             }
-            return node;
+            return null;
         };
         try {
             if (command.command === 'change-property') {
-                const target = findSourceNode(command.path);
+                const target = findSourceNode(command.path, command.sourcePath);
                 if (!target) return;
                 setAttrValue(target, command.property, command.value);
                 return;
             }
 
             if (command.command === 'change-attribute') {
-                const target = findSourceNode(command.path);
+                const target = findSourceNode(command.path, command.sourcePath);
                 if (!target || !command.attribute) return;
                 if (command.value === '' || command.value === null || command.value === undefined) {
                     target.removeAttribute(command.attribute);
@@ -555,7 +705,7 @@ class EditorMain extends PlElement {
             }
 
             if (command.command === 'change-text-node') {
-                const target = findSourceNode(command.path);
+                const target = findSourceNode(command.path, command.sourcePath);
                 if (!target) return;
                 let node = target;
                 for (const idx of (command.textPath || [])) {
@@ -567,26 +717,26 @@ class EditorMain extends PlElement {
             }
 
             if (command.command === 'add-element') {
-                const target = findSourceNode(command.path);
+                const target = findSourceNode(command.path, command.sourcePath);
                 const node = this._createElementForTemplate(command.element);
-                this._appendWithPosition(node, target, command.position);
+                if (!target || !node) return;
+                this._appendWithPosition(node, target, command.position, command.slot);
                 return;
             }
 
             if (command.command === 'move-element') {
-                const node = findSourceNode(command.element);
-                const target = findSourceNode(command.path);
-                this._appendWithPosition(node, target, command.position);
+                const node = findSourceNode(command.element, command.sourceElement);
+                const target = findSourceNode(command.path, command.sourcePath);
+                if (!node || !target) return;
+                this._appendWithPosition(node, target, command.position, command.slot);
                 return;
             }
 
             if (command.command === 'del-element') {
-                const target = findSourceNode(command.path);
+                const target = findSourceNode(command.path, command.sourcePath);
                 target?.remove?.();
             }
-        } catch (err) {
-            console.warn('[nf-dev-editor] unable to mirror command to source template:', err);
-        }
+        } catch (_err) {}
     }
 
     async _loadBackendSource(form) {
@@ -616,9 +766,7 @@ class EditorMain extends PlElement {
             this.sourceTplRoot = host;
             this.treeRoot = host;
             this._sourceCommandLog.forEach(cmd => this._applyCommandToSourceTemplate(cmd, host));
-        } catch (err) {
-            console.warn('[nf-dev-editor] unable to load backend source:', err);
-        }
+        } catch (_err) {}
     }
 
     close() {
@@ -689,33 +837,12 @@ class EditorMain extends PlElement {
                     const prefix = runtimeSegs.slice(0, cut);
                     const candidate = '/' + [...prefix, 'template', ...tplSegs].join('/');
                     const resolved = resolveExactPath(candidate);
-                    try {
-                        console.log('[nf-dev-editor][editor-main][resolveSourceSelectionPath]', {
-                            runtimePath,
-                            templatePath,
-                            candidate,
-                            resolvedPath: resolved?.path || null,
-                            resolvedNode: resolved?.node?.localName || resolved?.node?.nodeName || null
-                        });
-                    } catch (_err) {
-                        // ignore logging errors
-                    }
                     if (resolved.node && resolved.path) return resolved.path;
                 }
             }
         }
 
         const direct = resolveExactPath(runtimePath);
-        try {
-            console.log('[nf-dev-editor][editor-main][resolveSourceSelectionPath][direct]', {
-                runtimePath,
-                templatePath,
-                resolvedPath: direct?.path || null,
-                resolvedNode: direct?.node?.localName || direct?.node?.nodeName || null
-            });
-        } catch (_err) {
-            // ignore logging errors
-        }
         if (direct.node && direct.path) return direct.path;
 
         const fallbackResolved = resolvePath(runtimePath);
@@ -731,31 +858,550 @@ class EditorMain extends PlElement {
         });
     }
 
-    _copyText(text) {
-        const value = String(text || '');
-        if (!value) return;
-        const clipboard = globalThis?.navigator?.clipboard;
-        if (clipboard?.writeText) {
-            clipboard.writeText(value).catch(() => this._legacyCopy(value));
-            return;
-        }
-        this._legacyCopy(value);
+    _attachDnDRoot(root) {
+        if (!root || typeof root.addEventListener !== 'function') return;
+        if (this._dndRoots?.has(root)) return;
+        drndr.listen(this, this.drawReceiver, this.hideReceiver, this.drop, root);
+        root.addEventListener('dragstart', this._onRootDragStartBound, true);
+        this._dndRoots?.add(root);
+        this._dndRootRefs?.push(root);
     }
 
-    _legacyCopy(text) {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        try {
-            document.execCommand('copy');
-        } catch (_err) {
-            // ignore
+    _onRootDragStart(e) {
+        const dt = e?.dataTransfer;
+        if (!dt) return;
+
+        const existingTypes = [...(dt.types || [])].map((type) => String(type).toLowerCase());
+        if (existingTypes.includes('dev/element')) return;
+
+        const path = e?.composedPath?.() || [];
+        const rawNode = path.find((part) => part instanceof Node) || null;
+        const node = (rawNode instanceof Node && this.domRoot && (rawNode === this.domRoot || this.domRoot.contains?.(rawNode)))
+            ? rawNode
+            : domSelector.findEditableNode(path);
+        if (!(node instanceof Node)) return;
+
+        const root = this.domRoot;
+        if (root) {
+            const isInRoot = node === root || root.contains?.(node) || node.getRootNode?.() === root;
+            if (!isInRoot) return;
         }
-        ta.remove();
+
+        let runtimePath = getXPath(node);
+        if (!runtimePath) return;
+
+        const selected = this.selected;
+        const fromSelected = selected instanceof Node
+            && (node === selected || selected.contains?.(node));
+        if (fromSelected && this.selectedPath) {
+            runtimePath = this.selectedPath;
+        }
+
+        const sourcePath = (fromSelected && this.selectedSourcePath)
+            || this._resolveTemplatePathForRuntimeNode(fromSelected ? selected : node, runtimePath)
+            || this._resolveTplPath(runtimePath, '')
+            || runtimePath;
+
+        dt.effectAllowed = 'move';
+        dt.setData('dev/move', runtimePath);
+        dt.setData('dev/move-source', sourcePath);
+        if (!String(dt.getData('text/plain') || '').trim()) {
+            dt.setData('text/plain', `dev:move:${runtimePath}`);
+        }
+    }
+
+    _getDropPosition(event, node) {
+        if (event?.ctrlKey) return 'after';
+        if (event?.shiftKey) return 'before';
+        if (String(node?.localName || '').toLowerCase() === 'template') return 'in';
+        if (!this._canDropInside(node)) return 'before';
+
+        const rect = node?.getBoundingClientRect?.();
+        if (!rect) return 'in';
+        const y = Number(event?.clientY);
+        if (!Number.isFinite(y)) return 'in';
+
+        const beforeZone = Math.min(14, Math.max(6, rect.height * 0.22));
+        if (y <= rect.top + beforeZone) return 'before';
+        return 'in';
+    }
+
+    _canDropInside(node) {
+        if (!(node instanceof Element)) return false;
+        const tag = String(node.localName || '').toLowerCase();
+        if (!tag) return false;
+        if (tag === 'template') return true;
+        return !VOID_HTML_TAGS.has(tag);
+    }
+
+    _prepareDropCommand(command) {
+        if (!command || command.type !== 'dom') return command;
+        if (command.command !== 'add-element' && command.command !== 'move-element') return command;
+        if (command.command === 'add-element' && !this._isValidElementName(command.element)) return null;
+
+        command.sourcePath = command.sourcePath || command.path;
+        if (command.command === 'move-element') {
+            command.sourceElement = command.sourceElement || command.element;
+            const targetIsTemplate = String(command.sourcePath || '').includes('/template');
+            const selectedIsSource = this.selectedPath && command.element && this.selectedPath === command.element;
+            const selectedTemplatePath = String(this.selectedSourcePath || '');
+            if (targetIsTemplate
+                && !String(command.sourceElement || '').includes('/template')
+                && selectedIsSource
+                && selectedTemplatePath.includes('/template')) {
+                command.sourceElement = selectedTemplatePath;
+            }
+        }
+
+        const toRuntimePath = (path, sourcePath = '') => {
+            const source = String(path || '');
+            if (!source) return source;
+
+            const resolved = this._resolveTplPath(source, sourcePath);
+            if (resolved && resolved !== source) {
+                return resolved;
+            }
+
+            if (source.includes('/template')) {
+                const stripped = '/' + source
+                    .split('/')
+                    .filter(Boolean)
+                    .filter((segment) => !/^template(?:\[\d+])?$/i.test(String(segment)))
+                    .join('/');
+                if (stripped && stripped !== '/' && this._resolveDomNodeByPath(stripped)) {
+                    return stripped;
+                }
+            }
+
+            return resolved || source;
+        };
+
+        const runtimePath = toRuntimePath(command.path, command.sourcePath || '');
+        if (runtimePath && runtimePath !== command.path) {
+            command.path = runtimePath;
+        }
+        if (command.command === 'move-element' && command.element) {
+            const runtimeElement = toRuntimePath(command.element, command.sourceElement || '');
+            if (runtimeElement && runtimeElement !== command.element) {
+                command.element = runtimeElement;
+            }
+        }
+
+        // Validate move constraints in template tree to avoid false positives from runtime DOM fallback.
+        const targetTplNode = this._resolveTplNodeByPath(command.path, command.sourcePath || '');
+        const moveTplNode = command.command === 'move-element'
+            ? this._resolveTplNodeByPath(command.element, command.sourceElement || '')
+            : null;
+
+        if (moveTplNode instanceof Node && targetTplNode instanceof Node
+            && (targetTplNode === moveTplNode || moveTplNode.contains?.(targetTplNode))) {
+            return null;
+        }
+
+        const targetNode = this._resolveDomNodeByPath(command.path);
+        if (!(targetNode instanceof Node)) return command;
+        const moveNode = command.command === 'move-element'
+            ? this._resolveDomNodeByPath(command.element)
+            : null;
+
+        if (command.slot !== undefined) return command;
+        const decision = this._resolveDropSlotDecision({
+            position: command.position || 'in',
+            targetNode,
+            moveNode
+        });
+        if (decision.cancelled) return null;
+        if (decision.slot !== undefined) {
+            command.slot = decision.slot;
+        }
+        return command;
+    }
+
+    _resolveDropSlotDecision({ position, targetNode, moveNode }) {
+        const container = position === 'in'
+            ? targetNode
+            : (targetNode?.parentElement || targetNode?.parentNode || null);
+        if (!(container instanceof Element)) return { slot: undefined };
+
+        const options = this._collectContainerSlotOptions(container);
+        if (!options.length) return { slot: undefined };
+
+        const siblingSlot = position !== 'in' && targetNode instanceof Element
+            ? (targetNode.getAttribute('slot') || '')
+            : '';
+        const movingSlot = moveNode instanceof Element
+            ? (moveNode.getAttribute('slot') || '')
+            : '';
+        const preferred = options.includes(siblingSlot)
+            ? siblingSlot
+            : (options.includes(movingSlot) ? movingSlot : options[0]);
+
+        if (options.length === 1) {
+            return { slot: options[0] };
+        }
+
+        const printable = options
+            .map((slot, idx) => `${idx + 1}. ${slot || '(default)'}`)
+            .join('\n');
+        const hostName = container.localName || 'component';
+        const initial = preferred || '';
+        const answer = window.prompt(
+            `Выберите slot для вставки в ${hostName}:\n${printable}\n\n` +
+            `Введите имя slot или номер (пусто = default).`,
+            initial
+        );
+        if (answer === null) return { cancelled: true };
+
+        const normalized = String(answer).trim();
+        if (!normalized || normalized.toLowerCase() === 'default' || normalized === '(default)') {
+            return { slot: '' };
+        }
+        const index = Number(normalized);
+        if (Number.isFinite(index) && index >= 1 && index <= options.length) {
+            return { slot: options[index - 1] };
+        }
+        if (options.includes(normalized)) {
+            return { slot: normalized };
+        }
+        return { slot: preferred };
+    }
+
+    _collectContainerSlotOptions(container) {
+        if (!(container instanceof Element)) return [];
+        const names = new Set();
+
+        const appendSlot = (name) => {
+            if (name === undefined || name === null) return;
+            names.add(String(name).trim());
+        };
+
+        try {
+            const slots = [...(container.shadowRoot?.querySelectorAll?.('slot') || [])];
+            slots.forEach((slotEl) => appendSlot(slotEl.getAttribute('name') || ''));
+        } catch (_err) {
+            // ignore shadow access errors
+        }
+
+        const declared = container?.constructor?.slots;
+        if (Array.isArray(declared)) {
+            declared.forEach((slotName) => appendSlot(slotName));
+        } else if (declared && typeof declared === 'object') {
+            Object.keys(declared).forEach((slotName) => appendSlot(slotName));
+        }
+
+        return [...names];
+    }
+
+    _resolveDomNodeByPath(path) {
+        if (!path || !this.domRoot) return null;
+        const variants = new Set();
+        variants.add(String(path));
+        this._withNoTemplateVariant(path).forEach((v) => variants.add(v));
+        this._withTrimmedRootVariant(path).forEach((v) => variants.add(v));
+
+        for (const variant of variants) {
+            if (!variant) continue;
+            for (const candidate of buildXPathCandidates(variant)) {
+                const exact = findByXpath(this.domRoot, candidate);
+                if (exact) return exact;
+                const fallback = findByXpathWithFallback(this.domRoot, candidate).node;
+                if (fallback) return fallback;
+            }
+        }
+        return null;
+    }
+
+    _resolveDomNodeByPathStrict(path) {
+        if (!path || !this.domRoot) return null;
+        const variants = new Set();
+        variants.add(String(path));
+        this._withNoTemplateVariant(path).forEach((v) => variants.add(v));
+        this._withTrimmedRootVariant(path).forEach((v) => variants.add(v));
+
+        for (const variant of variants) {
+            if (!variant) continue;
+            for (const candidate of buildXPathCandidates(variant)) {
+                const exact = findByXpath(this.domRoot, candidate);
+                if (exact) return exact;
+            }
+        }
+        return null;
+    }
+
+    _resolveTplPath(path, sourcePath = '') {
+        if (!this.tplRoot) return null;
+        const node = this._resolveTplNodeByPath(path, sourcePath);
+        if (!(node instanceof Node)) return null;
+        return this._getRelativeTplPath(node);
+    }
+
+    _resolveTplNodeByPath(path, sourcePath = '') {
+        if (!this.tplRoot) return null;
+        const variants = new Set();
+        const appendVariants = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return;
+            variants.add(raw);
+            this._withNoTemplateVariant(raw).forEach((v) => variants.add(v));
+            this._withTrimmedRootVariant(raw).forEach((v) => variants.add(v));
+        };
+
+        appendVariants(path);
+        appendVariants(sourcePath);
+
+        for (const variant of variants) {
+            if (!variant) continue;
+            for (const candidate of buildXPathCandidates(variant)) {
+                const exact = findByXpath(this.tplRoot, candidate, true);
+                if (exact) return exact;
+                const structural = this._findTplNodeByStructure(this.tplRoot, candidate);
+                if (structural) return structural;
+            }
+        }
+        return null;
+    }
+
+    _findTplNodeByStructure(root, path) {
+        if (!root || !path) return null;
+        const parts = String(path).split('/').filter(Boolean);
+        if (!parts.length) return root;
+        let node = root;
+        for (const part of parts) {
+            const parsed = this._parseXPathSegment(part);
+            if (!parsed?.name) return null;
+
+            if (node instanceof HTMLTemplateElement) node = node.content;
+            const children = [...(node?.childNodes || [])].filter((child) => String(child?.localName || '').toLowerCase() === parsed.name);
+            if (children.length === 0) return null;
+            const idx = parsed.index < children.length ? parsed.index : -1;
+            if (idx < 0) return null;
+            node = children[idx];
+        }
+        return node || null;
+    }
+
+    _parseXPathSegment(segment) {
+        const match = String(segment || '').trim().match(/^(?<name>.*?)(?:\[(?<index>\d+)\])?(?:\{(?<domindex>\d+)\})?$/);
+        if (!match?.groups?.name) return null;
+        return {
+            name: String(match.groups.name).toLowerCase(),
+            index: match.groups.index ? Math.max(0, Number(match.groups.index) - 1) : 0
+        };
+    }
+
+    _getRelativeTplPath(node) {
+        if (!this.tplRoot || !(node instanceof Node)) return null;
+        if (node === this.tplRoot) return '/';
+
+        const segments = [];
+        let current = node;
+
+        while (current && current !== this.tplRoot) {
+            let parent = current.parentNode;
+            if (parent instanceof DocumentFragment && parent.host instanceof HTMLTemplateElement) {
+                parent = parent.host;
+            }
+            if (!parent || !(current instanceof Element)) return null;
+
+            const siblings = parent instanceof HTMLTemplateElement
+                ? [...(parent.content?.childNodes || [])].filter((child) => child?.localName === current.localName)
+                : [...(parent.childNodes || [])].filter((child) => child?.localName === current.localName);
+            const index = siblings.indexOf(current);
+            if (index < 0) return null;
+            const segment = index > 0 ? `${current.localName}[${index + 1}]` : current.localName;
+            segments.unshift(segment);
+            current = parent;
+        }
+
+        if (current !== this.tplRoot) return null;
+        return '/' + segments.join('/');
+    }
+
+    _withNoTemplateVariant(path) {
+        const source = String(path || '');
+        if (!source) return [];
+        const compact = '/' + source
+            .split('/')
+            .filter(Boolean)
+            .filter((segment) => !String(segment).toLowerCase().startsWith('template'))
+            .join('/');
+        return compact && compact !== '/' ? [compact] : [];
+    }
+
+    _withTrimmedRootVariant(path) {
+        const source = String(path || '');
+        const parts = source.split('/').filter(Boolean);
+        if (parts.length <= 1) return [];
+        const variants = [];
+        const dropFirst = '/' + parts.slice(1).join('/');
+        if (dropFirst && dropFirst !== '/') variants.push(dropFirst);
+        const withoutTemplate = this._withNoTemplateVariant(dropFirst);
+        withoutTemplate.forEach((v) => variants.push(v));
+        return variants;
+    }
+
+    _applySlotToNode(node, slot) {
+        if (!(node instanceof Element) || slot === undefined) return;
+        const normalized = String(slot || '').trim();
+        if (!normalized) {
+            node.removeAttribute('slot');
+            return;
+        }
+        setAttrValue(node, 'slot', normalized);
+    }
+
+    _isValidElementName(name) {
+        const value = String(name || '').trim().toLowerCase();
+        return /^[a-z][a-z0-9._-]*-[a-z0-9._-]+$/.test(value);
+    }
+
+    _extractDragPayload(e) {
+        let move = String(e?.dataTransfer?.getData?.('dev/move') || '').trim();
+        let moveSource = String(e?.dataTransfer?.getData?.('dev/move-source') || '').trim();
+        let element = String(e?.dataTransfer?.getData?.('dev/element') || '').trim();
+        const plain = String(e?.dataTransfer?.getData?.('text/plain') || '').trim();
+
+        if (!move && plain.startsWith('dev:move:')) {
+            move = plain.replace('dev:move:', '').trim();
+        }
+        if (!element && plain.startsWith('dev:element:')) {
+            element = plain.replace('dev:element:', '').trim();
+        }
+        if (!move && !element && this._isValidElementName(plain)) {
+            element = plain;
+        }
+
+        if (move) return { kind: 'move', value: move, source: moveSource || '' };
+        if (this._isValidElementName(element)) return { kind: 'add', value: element };
+        return null;
+    }
+
+    _hasDragPayload(e) {
+        const types = [...(e?.dataTransfer?.types || [])].map((t) => String(t).toLowerCase());
+        if (types.includes('dev/element') || types.includes('dev/move') || types.includes('text/plain')) {
+            return true;
+        }
+        return Boolean(this._extractDragPayload(e));
+    }
+
+    _resolveDropNode(e) {
+        let node = domSelector.findEditableNode(e?.composedPath?.() || []);
+        if (node) return node;
+
+        const x = Number(e?.clientX);
+        const y = Number(e?.clientY);
+        const hasPoint = Number.isFinite(x) && Number.isFinite(y);
+        if (!hasPoint) return null;
+
+        let target = null;
+        if (typeof this.domRoot?.elementFromPoint === 'function') {
+            target = this.domRoot.elementFromPoint(x, y);
+        }
+        if (!target && typeof document.elementFromPoint === 'function') {
+            target = document.elementFromPoint(x, y);
+        }
+        if (!target) return null;
+
+        const path = [];
+        let current = target;
+        while (current) {
+            path.push(current);
+            current = current.parentNode || current.host;
+        }
+        node = domSelector.findEditableNode(path);
+        return node || target;
+    }
+
+    _resolveTemplatePathForRuntimePath(path) {
+        const node = this._resolveDomNodeByPath(path);
+        if (node) {
+            return this._resolveTemplatePathForRuntimeNode(node, path);
+        }
+        return this._resolveSourceSelectionPath(path, '');
+    }
+
+    _resolveTemplatePathForRuntimeNode(node, fallbackPath = '') {
+        const runtimePath = fallbackPath || getXPath(node);
+        if (!(node instanceof Node)) return this._resolveSourceSelectionPath(runtimePath, '');
+        const ti = this._findSelectionTemplateInstance(node);
+        if (!ti) return this._resolveSourceSelectionPath(runtimePath, '');
+        const localPath = this._getPathInTemplateInstance(ti, node);
+        const tplContent = ti?.tpl?.tpl?.content;
+        if (!Array.isArray(localPath) || !tplContent?.childNodes) {
+            return this._resolveSourceSelectionPath(runtimePath, '');
+        }
+        const sourceNode = this._findNodeByIndexes({ childNodes: tplContent.childNodes }, localPath);
+        const templatePath = sourceNode ? getXPath(sourceNode) : '';
+        return this._resolveSourceSelectionPath(runtimePath, templatePath);
+    }
+
+    _findSelectionTemplateInstance(node) {
+        let n = node;
+        while (n) {
+            const ti = n?._item?._ti || null;
+            if (ti) return ti;
+            n = n.parentNode instanceof DocumentFragment ? n.parentNode.host : n.parentNode;
+        }
+        return null;
+    }
+
+    _getPathInTemplateInstance(ti, node) {
+        if (!ti || !node) return null;
+        const roots = Array.isArray(ti._nodes) ? ti._nodes : [];
+        if (!roots.length) return null;
+        const rootSet = new Set(roots);
+        const path = [];
+        let current = node;
+        while (current) {
+            if (rootSet.has(current)) {
+                path.unshift(roots.indexOf(current));
+                return path;
+            }
+            const parent = current.parentNode;
+            if (!parent?.childNodes) return null;
+            const index = [...parent.childNodes].indexOf(current);
+            if (index < 0) return null;
+            path.unshift(index);
+            current = parent;
+        }
+        return null;
+    }
+
+    _findNodeByIndexes(root, indexes) {
+        let node = root;
+        for (const idx of indexes || []) {
+            if (!node?.childNodes) return null;
+            node = node.childNodes[idx];
+            if (!node) return null;
+        }
+        return node;
+    }
+
+    _rebuildRuntimeFromTemplate(preferSource = false) {
+        const form = this.editForm;
+        const root = form?.root;
+        const host = root?.host || form;
+        const currentTi = host?._ti;
+        let template = currentTi?.tpl;
+        if (preferSource && this.sourceTplRoot instanceof HTMLTemplateElement) {
+            try {
+                template = new Template(this.sourceTplRoot.cloneNode(true));
+            } catch (_err) {
+                // fallback to current runtime template
+            }
+        }
+        if (!root || !host || !template) return false;
+        try {
+            currentTi.detach?.();
+            const nextTi = new TemplateInstance(template);
+            host._ti = nextTi;
+            nextTi.attach(root, undefined, host);
+            this.domRoot = root;
+            this.tplRoot = host?._ti?.tpl?.tpl || this.tplRoot;
+            return true;
+        } catch (_err) {
+            return false;
+        }
     }
 
 }

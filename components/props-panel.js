@@ -6,8 +6,7 @@ import "@plcmp/pl-textarea";
 import "@plcmp/pl-button";
 import "@plcmp/pl-radio-group";
 import "@plcmp/pl-radio-button";
-import "@plcmp/pl-icon";
-import "@plcmp/pl-dom-if";
+import "/@editor/components/editor-iconset.js";
 
 import { ChangePropertyCommand, ChangeAttributeCommand, ChangeTextNodeCommand } from "../lib/commands.js";
 import { buildXPathCandidates, findByXpath, findByXpathWithFallback } from "../lib/common.js";
@@ -295,73 +294,68 @@ class PropsPanel extends PlElement {
                                     </div>
                                     <div class="prop-help" hidden$="[[!item.description]]">[[item.description]]</div>
 
-                                    <pl-dom-if if="[[_isEditor(item,'text')]]" restamp>
-                                        <template>
-                                            <pl-input
-                                                value="{{item.value}}"
-                                                placeholder="[[item.placeholder]]"
-                                                title="[[_getTitle(item.currentValue)]]"
-                                                disabled$="[[item.readonly]]"
-                                                stretch></pl-input>
-                                        </template>
-                                    </pl-dom-if>
+                                    <template d:if="[[_isEditor(item,'text')]]" d:restamp>
+                                        <pl-input
+                                            value="{{item.value}}"
+                                            placeholder="[[item.placeholder]]"
+                                            title="[[_getTitle(item.currentValue)]]"
+                                            disabled$="[[item.readonly]]"
+                                            stretch></pl-input>
+                                    </template>
 
-                                    <pl-dom-if if="[[_isEditor(item,'number')]]" restamp>
-                                        <template>
-                                            <pl-input
-                                                value="{{item.value}}"
-                                                type="number"
-                                                placeholder="[[item.placeholder]]"
-                                                title="[[_getTitle(item.currentValue)]]"
-                                                disabled$="[[item.readonly]]"
-                                                stretch></pl-input>
-                                        </template>
-                                    </pl-dom-if>
+                                    <template d:if="[[_isEditor(item,'number')]]" d:restamp>
+                                        <pl-input
+                                            value="{{item.value}}"
+                                            type="number"
+                                            placeholder="[[item.placeholder]]"
+                                            title="[[_getTitle(item.currentValue)]]"
+                                            disabled$="[[item.readonly]]"
+                                            stretch></pl-input>
+                                    </template>
 
-                                    <pl-dom-if if="[[_isEditor(item,'textarea')]]" restamp>
-                                        <template>
-                                            <pl-textarea
-                                                value="{{item.value}}"
-                                                placeholder="[[item.placeholder]]"
-                                                title="[[_getTitle(item.currentValue)]]"
-                                                disabled$="[[item.readonly]]"
-                                                hide-resizer
-                                                stretch></pl-textarea>
-                                        </template>
-                                    </pl-dom-if>
+                                    <template d:if="[[_isEditor(item,'textarea')]]" d:restamp>
+                                        <pl-textarea
+                                            value="{{item.value}}"
+                                            placeholder="[[item.placeholder]]"
+                                            title="[[_getTitle(item.currentValue)]]"
+                                            disabled$="[[item.readonly]]"
+                                            hide-resizer
+                                            stretch></pl-textarea>
+                                    </template>
 
-                                    <pl-dom-if if="[[_isEditor(item,'select')]]" restamp>
-                                        <template>
-                                            <pl-combobox
-                                                data="[[item.options]]"
-                                                text-property="text"
-                                                value-property="value"
-                                                value="{{item.value}}"
-                                                disabled$="[[item.readonly]]"
-                                                stretch></pl-combobox>
-                                        </template>
-                                    </pl-dom-if>
+                                    <template d:if="[[_isEditor(item,'select')]]" d:restamp>
+                                        <pl-combobox
+                                            data="[[item.options]]"
+                                            text-property="text"
+                                            value-property="value"
+                                            value="{{item.value}}"
+                                            disabled$="[[item.readonly]]"
+                                            stretch></pl-combobox>
+                                    </template>
 
-                                    <pl-dom-if if="[[_isEditor(item,'icon-group')]]" restamp>
-                                        <template>
-                                            <pl-radio-group
-                                                selected="{{item.value}}"
-                                                disabled$="[[item.readonly]]">
-                                                <template d:repeat="{{item.iconOptions}}" d:as="opt">
-                                                    <pl-radio-button name="[[opt.value]]" label="[[opt.text]]" title="[[opt.title]]"></pl-radio-button>
-                                                </template>
-                                            </pl-radio-group>
-                                        </template>
-                                    </pl-dom-if>
+                                    <template d:if="[[_isEditor(item,'icon-group')]]" d:restamp>
+                                        <pl-radio-group
+                                            selected="{{item.value}}"
+                                            disabled$="[[item.readonly]]">
+                                            <template d:repeat="{{item.iconOptions}}" d:as="opt">
+                                                <pl-radio-button
+                                                    name="[[opt.value]]"
+                                                    label="[[opt.text]]"
+                                                    title="[[opt.title]]"
+                                                    icon="[[opt.icon]]"
+                                                    iconset="[[opt.iconset]]"
+                                                    icon-size="14">
+                                                </pl-radio-button>
+                                            </template>
+                                        </pl-radio-group>
+                                    </template>
 
-                                    <pl-dom-if if="[[_isEditor(item,'boolean')]]" restamp>
-                                        <template>
-                                            <pl-checkbox
-                                                checked="{{item.value}}"
-                                                caption="Включено"
-                                                disabled$="[[item.readonly]]"></pl-checkbox>
-                                        </template>
-                                    </pl-dom-if>
+                                    <template d:if="[[_isEditor(item,'boolean')]]" d:restamp>
+                                        <pl-checkbox
+                                            checked="{{item.value}}"
+                                            caption="Включено"
+                                            disabled$="[[item.readonly]]"></pl-checkbox>
+                                    </template>
                                 </div>
                             </template>
                         </div>
@@ -474,6 +468,8 @@ class PropsPanel extends PlElement {
         super();
         this._css = new Css();
         this._cssRulesFrame = 0;
+        this._selectionSyncInProgress = false;
+        this._updatingSelectedSourcePath = false;
     }
 
     _getTitle(title) {
@@ -485,40 +481,61 @@ class PropsPanel extends PlElement {
     }
 
     _selectedChange(path) {
-        if (path) {
-            const { tplNode, domNode, sourceNode, sourcePath } = this._resolveSelectedNodes(path);
-            const activeNode = sourceNode || tplNode || domNode;
-            this.selectedTag = domNode?.localName || tplNode?.localName || '';
-            this.selectedSourcePath = sourcePath || path;
-            this.data = this.fwt.getProperties(domNode, tplNode);
-            this.bindItems = this._collectBindItems(activeNode, this.data);
-            this.eventItems = this._collectEventItems(activeNode);
-            this.hasSelectedElement = activeNode instanceof Element;
-            this._setClassTokensFromNode(activeNode);
-            this._setCssRulesFromNode(domNode || activeNode);
-            this.classDraft = '';
-        } else {
-            this.data = [];
-            this.bindItems = [];
-            this.eventItems = [];
-            this.selectedTag = '';
-            this.selectedSourcePath = '';
-            this.hasSelectedElement = false;
-            this.classDraft = '';
-            this.classTokens = [];
-            this.classBindingValue = '';
-            this.cssRuleItems = [];
+        if (this._selectionSyncInProgress) return;
+        this._selectionSyncInProgress = true;
+        try {
+            if (path) {
+                const { tplNode, domNode, sourceNode, sourcePath } = this._resolveSelectedNodes(path);
+                const activeNode = sourceNode || tplNode || domNode;
+                this.selectedTag = domNode?.localName || tplNode?.localName || '';
+                const nextSourcePath = sourcePath || path;
+                if (this.selectedSourcePath !== nextSourcePath) {
+                    this._updatingSelectedSourcePath = true;
+                    this.selectedSourcePath = nextSourcePath;
+                    this._updatingSelectedSourcePath = false;
+                }
+                this.data = this.fwt.getProperties(domNode, tplNode);
+                this.bindItems = this._collectBindItems(activeNode, this.data);
+                this.eventItems = this._collectEventItems(activeNode);
+                this.hasSelectedElement = activeNode instanceof Element;
+                this._setClassTokensFromNode(activeNode);
+                this._setCssRulesFromNode(domNode || activeNode);
+                this.classDraft = '';
+            } else {
+                this.data = [];
+                this.bindItems = [];
+                this.eventItems = [];
+                this.selectedTag = '';
+                if (this.selectedSourcePath) {
+                    this._updatingSelectedSourcePath = true;
+                    this.selectedSourcePath = '';
+                    this._updatingSelectedSourcePath = false;
+                }
+                this.hasSelectedElement = false;
+                this.classDraft = '';
+                this.classTokens = [];
+                this.classBindingValue = '';
+                this.cssRuleItems = [];
+            }
+            this._syncPanelMeta();
+            this._buildGroups(this.data);
+        } finally {
+            this._selectionSyncInProgress = false;
         }
-        this._syncPanelMeta();
-        this._buildGroups(this.data);
     }
 
     _rootsChanged() {
         if (this.selected) this._selectedChange(this.selected);
     }
 
-    _selectedSourcePathChange() {
-        if (this.selected) this._selectedChange(this.selected);
+    _selectedSourcePathChange(newPath, oldPath) {
+        if (this._updatingSelectedSourcePath) return;
+        if (this._selectionSyncInProgress) return;
+        if (!this.selected) return;
+        const next = String(newPath || '').trim();
+        const prev = String(oldPath || '').trim();
+        if (!next || next === prev) return;
+        this._selectedChange(this.selected);
     }
 
     _resolveSelectedNodes(path) {
@@ -558,18 +575,6 @@ class PropsPanel extends PlElement {
         if (domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
             const nested = domNode.querySelector?.(tplNode.localName);
             if (nested) domNode = nested;
-        }
-
-        try {
-            console.log('[nf-dev-editor][props-panel][_resolveSelectedNodes]', {
-                selectedPath: path || null,
-                selectedSourcePath: this.selectedSourcePath || null,
-                domNode: domNode?.localName || domNode?.nodeName || null,
-                tplNode: tplNode?.localName || tplNode?.nodeName || null,
-                sourceNode: sourceNode?.localName || sourceNode?.nodeName || null
-            });
-        } catch (_err) {
-            // ignore logging errors
         }
 
         return {
@@ -698,6 +703,7 @@ class PropsPanel extends PlElement {
             value: String(opt?.value ?? ''),
             text: String(opt?.text ?? opt?.value ?? ''),
             icon: String(opt?.icon ?? ''),
+            iconset: String(opt?.iconset ?? 'pl-editor'),
             title: String(opt?.title ?? opt?.text ?? opt?.value ?? '')
         }));
     }

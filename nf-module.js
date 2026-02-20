@@ -173,8 +173,11 @@ function applyScriptsDelta(content, scriptsDelta, formName) {
 }
 
 async function init() {
+    const editorIconsetPath = path.join(__dirname, 'components', 'editor-iconset.js');
     registerLibDir('@editor/lib', __dirname + '/lib');
     registerLibDir('@editor/components', __dirname + '/components');
+    registerLibDir('lib/editor-iconset.js', editorIconsetPath, { singleFile: true });
+    registerLibDir('editor-iconset.js', editorIconsetPath, { singleFile: true });
 
     web.on('GET', '/@editor/form-source/:form', async context => {
         const file = await resolveFormFile(context.params.form);

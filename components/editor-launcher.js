@@ -1,10 +1,11 @@
 import { html, css, PlElement } from "polylib";
 import "@plcmp/pl-icon";
+import "/@editor/components/editor-iconset.js";
 
 import "../lib/shortcut.js";
 
 class EditorLauncher extends PlElement {
-    static template = html`<pl-icon iconset="pl-default" icon="pencil" size="16"></pl-icon>`;
+    static template = html`<pl-icon iconset="pl-editor" icon="form-editor" size="16"></pl-icon>`;
     static css = css`
         :host {
           position: fixed;
