@@ -71,7 +71,8 @@ class EditorMain extends PlElement {
             scriptsDelta: { type: Array, value: () => ([]) },
             stylesText: { type: String, value: '' },
             sourceScripts: { type: String, value: '' },
-            baseSignature: { type: String, value: '' }
+            baseSignature: { type: String, value: '' },
+            hasParentForm: { type: Boolean, value: false }
     }
 
     static css = css`
@@ -148,6 +149,7 @@ class EditorMain extends PlElement {
             <div class="left-toolbar">
                 <div class="left-toolbar-title">Конструктор формы</div>
                 <pl-flex-layout class="left-toolbar-actions">
+                    <pl-button variant="ghost" on-click="[[openParentForm]]" disabled="[[!hasParentForm]]" label="Родитель"></pl-button>
                     <pl-button variant="ghost" on-click="[[select]]" label="Выбрать"></pl-button>
                     <pl-button variant="primary" on-click="[[save]]" label="Сохранить"></pl-button>
                     <pl-button variant="ghost" on-click="[[scripts]]" label="JS"></pl-button>
@@ -174,6 +176,8 @@ class EditorMain extends PlElement {
         this._sourceRequestId = 0;
         this._sourceCommandLog = [];
         this._shortcutSubscriptions = [];
+        this._formStack = [];
+        this._selectionRoot = null;
 
         this._onSelectComponentBound = this.onSelectComponent.bind(this);
         this._onCommandBound = this.onCommand.bind(this);
@@ -220,8 +224,8 @@ class EditorMain extends PlElement {
     }
 
     select() {
-        if (!this.editForm?.root) return;
-        let root = this.editForm.root;
+        const root = this._selectionRoot || this.editForm?.root;
+        if (!root) return;
         return domSelector.select({ type: 'polylib-component', root });
     }
     _selectedChanged() {
@@ -231,6 +235,146 @@ class EditorMain extends PlElement {
             domSelector.hideSelector();
         }
     }
+
+    _extractFormNameFromTag(tagName) {
+        const name = String(tagName || '').trim().toLowerCase();
+        if (!name.startsWith('pl-form-')) return '';
+        return name.replace(/^pl-form-/, '');
+    }
+
+    _extractFormName(form) {
+        return this._extractFormNameFromTag(form?.localName || '');
+    }
+
+    _isNestedFormTag(tagName) {
+        const name = String(tagName || '').trim().toLowerCase();
+        if (!name.startsWith('pl-form-')) return false;
+        const formName = this._extractFormNameFromTag(name);
+        return formName.includes('.');
+    }
+
+    _findNestedFormHost(node) {
+        let current = node;
+        while (current) {
+            if (current instanceof Element && this._isNestedFormTag(current.localName)) {
+                return current;
+            }
+            const parent = current.parentNode instanceof DocumentFragment
+                ? current.parentNode.host
+                : current.parentNode;
+            current = parent || current.host || null;
+        }
+        return null;
+    }
+
+    _switchToFormIfNeeded(node) {
+        const nestedFormHost = this._findNestedFormHost(node);
+        if (!nestedFormHost || nestedFormHost === this.editForm) return false;
+        if (!nestedFormHost?.root) return false;
+        this._pushCurrentFormToStack();
+        this._setActiveForm(nestedFormHost, { resetStack: false });
+        return true;
+    }
+
+    _extractNestedFormTagFromPath(path) {
+        const parts = String(path || '').split('/').filter(Boolean);
+        for (let i = parts.length - 1; i >= 0; i--) {
+            const parsed = this._parseXPathSegment(parts[i]);
+            const name = String(parsed?.name || '').toLowerCase();
+            if (this._isNestedFormTag(name)) return name;
+        }
+        return '';
+    }
+
+    _findElementByLocalName(root, localName) {
+        if (!root || !localName) return null;
+        const expected = String(localName).toLowerCase();
+        const visited = new Set();
+        const queue = [root];
+
+        while (queue.length > 0) {
+            const node = queue.shift();
+            if (!node || visited.has(node)) continue;
+            visited.add(node);
+
+            if (node instanceof Element && String(node.localName || '').toLowerCase() === expected) {
+                return node;
+            }
+
+            if (node instanceof Element || node instanceof ShadowRoot || node instanceof DocumentFragment) {
+                const children = node.children ? [...node.children] : [...(node.childNodes || [])];
+                children.forEach((child) => queue.push(child));
+            }
+
+            if (node instanceof Element && node.shadowRoot) {
+                queue.push(node.shadowRoot);
+            }
+        }
+
+        return null;
+    }
+
+    _switchToFormByPath(runtimePath, templatePath) {
+        const tag = this._extractNestedFormTagFromPath(templatePath)
+            || this._extractNestedFormTagFromPath(runtimePath);
+        if (!tag) return false;
+        if (String(this.editForm?.localName || '').toLowerCase() === tag) return false;
+
+        const root = this._selectionRoot || this.editForm?.root || this.domScope;
+        const host = this._findElementByLocalName(root, tag)
+            || this._findElementByLocalName(this.domScope, tag);
+        if (!host?.root) return false;
+
+        this._pushCurrentFormToStack();
+        this._setActiveForm(host, { resetStack: false });
+        return true;
+    }
+
+    _isInsideSelectionTree(node, root) {
+        if (!(node instanceof Node) || !root) return false;
+        let current = node;
+        while (current) {
+            if (current === root) return true;
+            if (current instanceof ShadowRoot) {
+                current = current.host || null;
+                continue;
+            }
+            current = current.parentNode || current.host || current._io || null;
+        }
+        return false;
+    }
+
+    _pushCurrentFormToStack() {
+        const current = this.editForm;
+        if (!current?.root) return;
+        const last = this._formStack[this._formStack.length - 1];
+        if (last === current) return;
+        this._formStack.push(current);
+        this._syncParentFormState();
+    }
+
+    _popParentFormFromStack() {
+        while (this._formStack.length > 0) {
+            const candidate = this._formStack.pop();
+            if (candidate?.root) {
+                this._syncParentFormState();
+                return candidate;
+            }
+        }
+        this._syncParentFormState();
+        return null;
+    }
+
+    _syncParentFormState() {
+        this.hasParentForm = this._formStack.length > 0;
+    }
+
+    openParentForm() {
+        const parentForm = this._popParentFormFromStack();
+        if (!parentForm) return;
+        this._setActiveForm(parentForm, { resetStack: false });
+    }
+
     onSelectComponent(e) {
         const detail = e?.detail || {};
         const rawPath = String(detail.path || '');
@@ -247,14 +391,14 @@ class EditorMain extends PlElement {
             detailTargetTag: String(detail?.target?.localName || '')
         });
         if (this.selected) this.selected.draggable = false;
-        const root = this.editForm?.root;
+        const root = this._selectionRoot || this.editForm?.root;
         const runtimeNodeByTemplatePath = isTemplatePath
             ? this._resolveRuntimeNodeFromTemplatePath(rawPath)
             : null;
         const runtimeNodeByPath = runtimeNodeByTemplatePath
             || (fromTree
-                ? this._resolveDomNodeByPathStrict(detailRuntimePath || rawPath)
-                : this._resolveDomNodeByPath(detailRuntimePath || rawPath));
+                ? this._resolveSelectionNodeByPathStrict(detailRuntimePath || rawPath)
+                : this._resolveSelectionNodeByPath(detailRuntimePath || rawPath));
         let selectedNode = detail.target || runtimeNodeByPath || null;
         console.log('[nf-dev-editor][editor-main][select][resolved-pre]', {
             runtimeNodeByTemplatePathTag: String(runtimeNodeByTemplatePath?.localName || ''),
@@ -262,25 +406,42 @@ class EditorMain extends PlElement {
             selectedNodeTag: String(selectedNode?.localName || '')
         });
         if (root && selectedNode?.getRootNode?.() instanceof ShadowRoot && selectedNode.getRootNode() !== root) {
-            selectedNode = selectedNode.getRootNode().host || selectedNode;
+            const host = selectedNode.getRootNode().host || selectedNode;
+            const insideSelected = this._isInsideSelectionTree(selectedNode, root);
+            if (!insideSelected && this._isInsideSelectionTree(host, root)) {
+                selectedNode = host;
+            }
         }
-        if (!(selectedNode instanceof Node) || (root && selectedNode !== root && !root.contains?.(selectedNode))) {
+        if (!(selectedNode instanceof Node) || (root && selectedNode !== root && !this._isInsideSelectionTree(selectedNode, root))) {
             const fallbackRuntimePath = detailRuntimePath
                 || (runtimeNodeByTemplatePath ? getXPath(runtimeNodeByTemplatePath) : '')
                 || (runtimeNodeByPath ? getXPath(runtimeNodeByPath) : '')
                 || (isTemplatePath ? (this._withNoTemplateVariant(rawPath)[0] || '') : rawPath);
             if (fromTree) {
-                selectedNode = this._resolveDomNodeByPathStrict(fallbackRuntimePath)
+                selectedNode = this._resolveSelectionNodeByPathStrict(fallbackRuntimePath)
                     || (isTemplatePath ? this._resolveRuntimeNodeFromTemplatePath(rawPath) : null);
             } else {
-                selectedNode = root
-                    ? (findByXpath(root, fallbackRuntimePath) || findByXpathWithFallback(root, fallbackRuntimePath).node)
-                    : null;
+                selectedNode = this._resolveSelectionNodeByPath(fallbackRuntimePath);
             }
             console.log('[nf-dev-editor][editor-main][select][fallback]', {
                 fallbackRuntimePath,
                 selectedNodeTag: String(selectedNode?.localName || '')
             });
+        }
+        let switchedToNestedForm = this._switchToFormIfNeeded(selectedNode);
+        if (!switchedToNestedForm) {
+            switchedToNestedForm = this._switchToFormByPath(detailRuntimePath || rawPath, detailTemplatePath || rawPath);
+        }
+        if (switchedToNestedForm && selectedNode === this.editForm) {
+            selectedNode = this.editForm?.root || selectedNode;
+        }
+        if (switchedToNestedForm && selectedNode && this.editForm?.root) {
+            const selectedRoot = selectedNode.getRootNode?.();
+            if (selectedRoot instanceof ShadowRoot && selectedRoot.host === this.editForm) {
+                // keep selected inner node
+            } else if (selectedNode === this.editForm) {
+                selectedNode = this.editForm.root;
+            }
         }
         const runtimePath = selectedNode
             ? getXPath(selectedNode)
@@ -322,7 +483,7 @@ class EditorMain extends PlElement {
             innerParts: innerParts.map((part) => `${part.name}[${part.index}]`)
         });
 
-        const containerNode = this._resolveDomNodeByPath(containerPath);
+        const containerNode = this._resolveSelectionNodeByPath(containerPath) || this._resolveDomNodeByPath(containerPath);
         if (!(containerNode instanceof Node)) {
             console.log('[nf-dev-editor][editor-main][resolve-template][container-miss]', {
                 sourcePath: raw,
@@ -430,38 +591,19 @@ class EditorMain extends PlElement {
     }
 
     onCurrentFormChange(e) {
-        let current = e.detail;
-        if (current) {
-            let form = this.fwt.findRootElement(current.form);
-            if (!form?.root) {
-                this.editForm = null;
-                this.tplRoot = null;
-                this.domRoot = null;
-                this.formClassName = '';
-                this.stylesText = '';
-                this.sourceScripts = '';
-                this.baseSignature = '';
-                this.sourceTplRoot = null;
-                this.treeRoot = null;
-                this._sourceTemplateHost = null;
-                domSelector.root = null;
-                return;
-            }
-            this.editForm = form;
-            this.tplRoot = getDesignedTpl(form);
-            this.domRoot = form.root;
-            this.formClassName = form.constructor?.name || form.localName;
-            this.stylesText = getStyles(form);
-            this.sourceScripts = this.fwt.getFunctions(form).map(x => x.text).join('\n');
-            this.baseSignature = '';
-            this.sourceTplRoot = null;
-            this.treeRoot = this.tplRoot;
-            this.selectedSourcePath = '';
-            this._sourceCommandLog = [];
-            this._attachDnDRoot(this.domRoot);
-            this._setSourceTemplate(this.tplRoot?.cloneNode(true));
-            this._loadBackendSource(form);
-        } else {
+        const current = e?.detail || null;
+        this._setActiveForm(current?.form || null, { resetStack: true });
+    }
+
+    _setActiveForm(rawForm, { resetStack = false } = {}) {
+        const form = rawForm ? this.fwt.findRootElement(rawForm) : null;
+
+        if (resetStack) {
+            this._formStack = [];
+            this._syncParentFormState();
+        }
+
+        if (!form?.root) {
             this.editForm = null;
             this.tplRoot = null;
             this.domRoot = null;
@@ -471,11 +613,37 @@ class EditorMain extends PlElement {
             this.baseSignature = '';
             this.sourceTplRoot = null;
             this.treeRoot = null;
-            this.selectedSourcePath = '';
             this._sourceTemplateHost = null;
+            this.selectedSourcePath = '';
             this._sourceCommandLog = [];
+            if (resetStack) this._selectionRoot = null;
+            if (resetStack) {
+                this._formStack = [];
+                this._syncParentFormState();
+            }
+            domSelector.root = null;
+            return;
         }
-        domSelector.root = this.domRoot;
+
+        this.editForm = form;
+        this.tplRoot = getDesignedTpl(form);
+        this.domRoot = form.root;
+        this.formClassName = form.constructor?.name || form.localName;
+        this.stylesText = getStyles(form);
+        this.sourceScripts = this.fwt.getFunctions(form).map(x => x.text).join('\n');
+        this.baseSignature = '';
+        this.sourceTplRoot = null;
+        this.treeRoot = this.tplRoot;
+        this.selectedSourcePath = '';
+        this._sourceCommandLog = [];
+        this._attachDnDRoot(this.domRoot);
+        this._setSourceTemplate(this.tplRoot?.cloneNode(true));
+        this._loadBackendSource(form);
+        if (resetStack || !this._selectionRoot || !this._selectionRoot.isConnected) {
+            this._selectionRoot = form.root;
+        }
+        this._syncParentFormState();
+        domSelector.root = this._selectionRoot || this.domRoot;
     }
 
     onHighlight(e) {
@@ -556,7 +724,7 @@ class EditorMain extends PlElement {
         if (!this.editForm) {
             throw new Error('No active form to save');
         }
-        let name = this.editForm.localName.replace(/^pl-form-/, '');
+        let name = this._extractFormName(this.editForm);
         let tplText = this._getSaveTemplateText();
         let body = JSON.stringify({
             tpl: tplText,
@@ -740,7 +908,7 @@ class EditorMain extends PlElement {
     }
 
     async _loadBackendSource(form) {
-        const formName = form?.localName?.replace(/^pl-form-/, '');
+        const formName = this._extractFormName(form);
         if (!formName) return;
 
         const requestId = ++this._sourceRequestId;
@@ -1111,6 +1279,26 @@ class EditorMain extends PlElement {
         return null;
     }
 
+    _resolveSelectionNodeByPath(path) {
+        const root = this._selectionRoot || this.domRoot;
+        if (!path || !root) return null;
+        const variants = new Set();
+        variants.add(String(path));
+        this._withNoTemplateVariant(path).forEach((v) => variants.add(v));
+        this._withTrimmedRootVariant(path).forEach((v) => variants.add(v));
+
+        for (const variant of variants) {
+            if (!variant) continue;
+            for (const candidate of buildXPathCandidates(variant)) {
+                const exact = findByXpath(root, candidate);
+                if (exact) return exact;
+                const fallback = findByXpathWithFallback(root, candidate).node;
+                if (fallback) return fallback;
+            }
+        }
+        return null;
+    }
+
     _resolveDomNodeByPathStrict(path) {
         if (!path || !this.domRoot) return null;
         const variants = new Set();
@@ -1122,6 +1310,24 @@ class EditorMain extends PlElement {
             if (!variant) continue;
             for (const candidate of buildXPathCandidates(variant)) {
                 const exact = findByXpath(this.domRoot, candidate);
+                if (exact) return exact;
+            }
+        }
+        return null;
+    }
+
+    _resolveSelectionNodeByPathStrict(path) {
+        const root = this._selectionRoot || this.domRoot;
+        if (!path || !root) return null;
+        const variants = new Set();
+        variants.add(String(path));
+        this._withNoTemplateVariant(path).forEach((v) => variants.add(v));
+        this._withTrimmedRootVariant(path).forEach((v) => variants.add(v));
+
+        for (const variant of variants) {
+            if (!variant) continue;
+            for (const candidate of buildXPathCandidates(variant)) {
+                const exact = findByXpath(root, candidate);
                 if (exact) return exact;
             }
         }
