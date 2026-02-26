@@ -224,7 +224,10 @@ class TreeList extends PlElement {
 	}
 
 	onSelect(item) {
-		let model = this._extractRowModel(item?.detail?.model) || item?.detail?.model;
+		let model = item?.detail?.model?.row
+			|| item?.detail?.row
+			|| this._extractRowModel(item?.detail?.model)
+			|| item?.detail?.model;
 		let node = model?.node;
 		let path = model?.path || (node ? getXPath(node) : '');
 		if (!path) return;
@@ -287,10 +290,9 @@ class TreeList extends PlElement {
 	_extractRowModel(model) {
 		if (!model || typeof model !== 'object') return null;
 		if (model.row && typeof model.row === 'object') return model.row;
-		for (const value of Object.values(model)) {
-			if (!value || typeof value !== 'object') continue;
-			if ('path' in value || 'node' in value) return value;
-		}
+		if ('path' in model || 'node' in model) return model;
+		if (model.data && typeof model.data === 'object' && ('path' in model.data || 'node' in model.data)) return model.data;
+		if (model.item && typeof model.item === 'object' && ('path' in model.item || 'node' in model.item)) return model.item;
 		return null;
 	}
 

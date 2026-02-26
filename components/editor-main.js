@@ -344,6 +344,57 @@ class EditorMain extends PlElement {
         return false;
     }
 
+    _resolveSelectionNodeByExactPath(path) {
+        const root = this._selectionRoot || this.domRoot;
+        if (!path || !root) return null;
+        return findByXpath(root, String(path)) || null;
+    }
+
+    _handleTreeSelection(detail = {}) {
+        const sourcePath = String(detail.templatePath || detail.path || '').trim();
+        const runtimePathHint = String(detail.runtimePath || detail.path || '').trim();
+        if (!sourcePath && !runtimePathHint) return;
+
+        let selectedNode = null;
+        const root = this._selectionRoot || this.editForm?.root;
+        if (detail.target instanceof Node && this._isInsideSelectionTree(detail.target, root)) {
+            selectedNode = detail.target;
+        }
+
+        if (!selectedNode && runtimePathHint) {
+            selectedNode = this._resolveSelectionNodeByExactPath(runtimePathHint);
+        }
+        if (!selectedNode && sourcePath) {
+            selectedNode = this._resolveSelectionNodeByExactPath(sourcePath);
+        }
+        if (!selectedNode && sourcePath.includes('/template')) {
+            selectedNode = this._resolveRuntimeNodeFromTemplatePath(sourcePath);
+        }
+
+        let switchedToNestedForm = this._switchToFormIfNeeded(selectedNode);
+        if (!switchedToNestedForm) {
+            switchedToNestedForm = this._switchToFormByPath(runtimePathHint, sourcePath);
+        }
+        if (switchedToNestedForm && !selectedNode) {
+            if (runtimePathHint) selectedNode = this._resolveSelectionNodeByExactPath(runtimePathHint);
+            if (!selectedNode && sourcePath) selectedNode = this._resolveSelectionNodeByExactPath(sourcePath);
+        }
+
+        const selectedPath = selectedNode
+            ? getXPath(selectedNode)
+            : (runtimePathHint || sourcePath);
+
+        this.selected = null;
+        this.selectedPath = '';
+        this.selectedSourcePath = '';
+        this.selectedPath = selectedPath;
+        this.selectedSourcePath = sourcePath || selectedPath;
+        this.selected = selectedNode;
+        if (this.selected) {
+            this.selected.draggable = true;
+        }
+    }
+
     _pushCurrentFormToStack() {
         const current = this.editForm;
         if (!current?.root) return;
@@ -390,6 +441,10 @@ class EditorMain extends PlElement {
             fromTree,
             detailTargetTag: String(detail?.target?.localName || '')
         });
+        if (fromTree) {
+            this._handleTreeSelection(detail);
+            return;
+        }
         if (this.selected) this.selected.draggable = false;
         const root = this._selectionRoot || this.editForm?.root;
         const runtimeNodeByTemplatePath = isTemplatePath

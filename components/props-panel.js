@@ -485,10 +485,15 @@ class PropsPanel extends PlElement {
         this._selectionSyncInProgress = true;
         try {
             if (path) {
-                const { tplNode, domNode, sourceNode, sourcePath } = this._resolveSelectedNodes(path);
+                const { tplNode, domNode, sourceNode, sourcePath, sourceExactPath } = this._resolveSelectedNodes(path);
                 const activeNode = sourceNode || tplNode || domNode;
                 this.selectedTag = domNode?.localName || tplNode?.localName || '';
-                const nextSourcePath = sourcePath || path;
+                let nextSourcePath = sourcePath || path;
+                const currentSourcePath = String(this.selectedSourcePath || '').trim();
+                if (currentSourcePath && !sourceExactPath) {
+                    // Не переписываем путь точного выбора из дерева на fallback-предка.
+                    nextSourcePath = currentSourcePath;
+                }
                 if (this.selectedSourcePath !== nextSourcePath) {
                     this._updatingSelectedSourcePath = true;
                     this.selectedSourcePath = nextSourcePath;
@@ -550,21 +555,25 @@ class PropsPanel extends PlElement {
         };
 
         const sourceLookupPath = this.selectedSourcePath || path;
-        const domResolved = findByXpathWithFallback(this.domRoot, path);
-        let domNode = domResolved.node;
+        const strictSelection = Boolean(this.selectedSourcePath);
         const sourceExact = resolveExact(this.sourceTplRoot, sourceLookupPath, true);
         const sourceResolved = sourceExact.node
             ? sourceExact
-            : findByXpathWithFallback(this.sourceTplRoot, sourceLookupPath, true);
+            : (strictSelection ? { node: null, path: sourceLookupPath } : findByXpathWithFallback(this.sourceTplRoot, sourceLookupPath, true));
+        const domExact = resolveExact(this.domRoot, path, false);
+        const domResolved = domExact.node
+            ? domExact
+            : ((strictSelection || sourceResolved.node) ? { node: null, path: null } : findByXpathWithFallback(this.domRoot, path));
+        let domNode = domResolved.node;
         const runtimeTplExact = resolveExact(this.tplRoot, path, true);
         const runtimeTplResolved = runtimeTplExact.node
             ? runtimeTplExact
-            : findByXpathWithFallback(this.tplRoot, path, true);
+            : (strictSelection ? { node: null, path } : findByXpathWithFallback(this.tplRoot, path, true));
         const sourceNode = sourceResolved.node;
         const runtimeTplNode = runtimeTplResolved.node;
         let tplNode = sourceNode || runtimeTplNode;
 
-        if (domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
+        if (!strictSelection && domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
             const sourceByRuntime = resolveExact(this.sourceTplRoot, path, true).node;
             const runtimeBySource = resolveExact(this.tplRoot, sourceLookupPath, true).node;
             const compatible = [sourceByRuntime, runtimeBySource, runtimeTplNode, sourceNode]
@@ -572,7 +581,7 @@ class PropsPanel extends PlElement {
             if (compatible) tplNode = compatible;
         }
 
-        if (domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
+        if (!strictSelection && domNode?.localName && tplNode?.localName && domNode.localName !== tplNode.localName) {
             const nested = domNode.querySelector?.(tplNode.localName);
             if (nested) domNode = nested;
         }
@@ -581,7 +590,8 @@ class PropsPanel extends PlElement {
             domNode,
             sourceNode,
             tplNode,
-            sourcePath: sourceResolved.path || runtimeTplResolved.path || domResolved.path || path
+            sourcePath: sourceExact.path || sourceResolved.path || runtimeTplResolved.path || domResolved.path || path,
+            sourceExactPath: sourceExact.path || ''
         };
     }
 
