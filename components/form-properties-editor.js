@@ -2,6 +2,7 @@ import { PlElement, html, css } from "polylib";
 import "@plcmp/pl-button";
 import "@plcmp/pl-icon-button";
 import "@plcmp/pl-iconset-default";
+import "@plcmp/pl-table";
 
 const PROPERTY_TYPES = ['String', 'Number', 'Boolean', 'Object', 'Array', 'Date', 'Function'];
 
@@ -345,7 +346,7 @@ class PlFormPropertiesEditor extends PlElement {
         opened: { type: Boolean, value: false, reflectToAttribute: true },
         propertiesText: { type: String, value: '{\n}', observer: '_propertiesTextChanged' },
         propertyTypes: { type: Array, value: () => [...PROPERTY_TYPES] },
-        items: { type: Array, value: () => [] },
+        items: { type: Array, value: () => [], observer: '_itemsChanged' },
         parseError: { type: String, value: '' }
     };
 
@@ -375,6 +376,7 @@ class PlFormPropertiesEditor extends PlElement {
             left: 50%;
             transform: translate(-50%, -50%);
             width: min(1120px, calc(100% - 48px));
+            height: min(720px, calc(100% - 48px));
             max-height: calc(100% - 48px);
             display: grid;
             grid-template-rows: auto minmax(0, 1fr) auto;
@@ -420,127 +422,59 @@ class PlFormPropertiesEditor extends PlElement {
         }
 
         .modal-body {
-            min-height: 0;
-            overflow: auto;
-            padding: 16px;
+            height: 100%;
+            min-height: 320px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            padding: 0;
             box-sizing: border-box;
             background: color-mix(in oklch, var(--pl-background-color) 92%, var(--pl-grey-lightest) 8%);
         }
 
-        .items {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .item {
-            border: 1px solid var(--pl-grey-light);
-            border-radius: var(--pl-border-radius);
-            background: var(--pl-background-color);
-            padding: 14px;
-            box-sizing: border-box;
-        }
-
-        .item-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 12px;
-        }
-
-        .item-title {
-            font: var(--pl-header-font);
-            color: var(--pl-header-color);
-        }
-
-        .item-grid {
-            display: grid;
-            grid-template-columns: 1.1fr 180px 1fr;
-            gap: 10px 12px;
-        }
-
-        .field {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            min-width: 0;
-        }
-
-        .field.span-2 {
-            grid-column: span 2;
-        }
-
-        .field.span-3 {
-            grid-column: 1 / -1;
-        }
-
-        .field-label {
-            font: var(--pl-caption-font);
-            color: var(--pl-grey-dark);
-        }
-
-        .field-control,
-        .field-control-textarea,
-        .field-select {
+        .table-wrap {
             width: 100%;
-            min-height: 32px;
-            padding: 8px 10px;
-            border: 1px solid var(--pl-grey-base);
-            border-radius: var(--pl-border-radius);
-            background: var(--pl-background-color);
-            box-sizing: border-box;
-            font: var(--pl-text-font);
-            color: var(--pl-text-color);
-        }
-
-        .field-control-textarea {
-            min-height: 74px;
-            resize: vertical;
-        }
-
-        .flags {
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
             display: flex;
-            flex-wrap: wrap;
-            gap: 14px;
-            padding-top: 4px;
+            flex-direction: column;
+            flex: 1 1 auto;
         }
 
-        .flag {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            font: var(--pl-text-font);
-            color: var(--pl-text-color);
-        }
-
-        .flag input {
-            margin: 0;
+        pl-table.props-table {
+            width: 100%;
+            height: 100%;
+            flex: 1 1 auto;
+            min-height: 320px;
+            border: 0;
+            border-radius: 0;
+            --pl-table-cell-height: calc(var(--pl-base-size) + 8px);
         }
 
         .empty {
-            padding: 18px;
-            border: 1px dashed var(--pl-grey-base);
-            border-radius: var(--pl-border-radius);
-            background: var(--pl-background-color);
+            width: 100%;
+            height: 100%;
+            min-height: 180px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 18px 16px;
+            box-sizing: border-box;
             font: var(--pl-text-font);
             color: var(--pl-grey-darkest);
             text-align: center;
+        }
+
+        .table-wrap[hidden],
+        .empty[hidden] {
+            display: none !important;
         }
 
         @media (max-width: 980px) {
             .modal {
                 width: calc(100% - 24px);
                 max-height: calc(100% - 24px);
-            }
-
-            .item-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .field.span-2,
-            .field.span-3 {
-                grid-column: auto;
             }
         }
     `;
@@ -553,70 +487,139 @@ class PlFormPropertiesEditor extends PlElement {
                     <div class="modal-title">Свойства формы</div>
                     <div class="modal-subtitle">Редактирование свойств формы. Изменения сохраняются общей кнопкой редактора.</div>
                 </div>
-                <pl-icon-button variant="ghost" iconset="pl-default" icon="close" title="Закрыть" on-click="[[close]]"></pl-icon-button>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <pl-button variant="ghost" label="Добавить свойство" on-click="[[onAddItemClick]]"></pl-button>
+                    <pl-icon-button variant="ghost" iconset="pl-default" icon="close" title="Закрыть" on-click="[[close]]"></pl-icon-button>
+                </div>
             </div>
             <div class="modal-body">
-                <div class="items" hidden$="[[!hasItems(items)]]">
-                    <template d:repeat="[[items]]" d:as="item">
-                        <div class="item" data-item-id$="[[item._id]]">
-                            <div class="item-head">
-                                <div class="item-title">[[item.name]]</div>
-                                <pl-icon-button variant="ghost" iconset="pl-default" icon="delete" title="Удалить свойство" data-item-id$="[[item._id]]" on-click="[[onDeleteItemClick]]"></pl-icon-button>
-                            </div>
-                            <div class="item-grid">
-                                <label class="field">
-                                    <span class="field-label">Имя</span>
-                                    <input class="field-control" value$="[[item.name]]" data-item-id$="[[item._id]]" data-field="name" on-input="[[onFieldInput]]">
-                                </label>
-                                <label class="field">
-                                    <span class="field-label">Тип</span>
-                                    <select class="field-select" value$="[[item.typeSource]]" data-item-id$="[[item._id]]" data-field="typeSource" on-change="[[onFieldInput]]">
-                                        <option value=""></option>
-                                        <template d:repeat="[[propertyTypes]]" d:as="typeName">
-                                            <option value$="[[typeName]]">[[typeName]]</option>
-                                        </template>
-                                    </select>
-                                </label>
-                                <label class="field">
-                                    <span class="field-label">Observer</span>
-                                    <input class="field-control" value$="[[item.observer]]" data-item-id$="[[item._id]]" data-field="observer" on-input="[[onFieldInput]]">
-                                </label>
-                                <label class="field span-3">
-                                    <span class="field-label">Value</span>
-                                    <textarea class="field-control-textarea" data-item-id$="[[item._id]]" data-field="valueSource" on-input="[[onFieldInput]]">[[item.valueSource]]</textarea>
-                                </label>
-                                <label class="field">
-                                    <span class="field-label">Computed</span>
-                                    <input class="field-control" value$="[[item.computed]]" data-item-id$="[[item._id]]" data-field="computed" on-input="[[onFieldInput]]">
-                                </label>
-                                <label class="field">
-                                    <span class="field-label">Attribute</span>
-                                    <input class="field-control" value$="[[item.attribute]]" data-item-id$="[[item._id]]" data-field="attribute" on-input="[[onFieldInput]]">
-                                </label>
-                                <label class="field span-3">
-                                    <span class="field-label">Доп. поля</span>
-                                    <textarea class="field-control-textarea" data-item-id$="[[item._id]]" data-field="extrasSource" on-input="[[onFieldInput]]">[[item.extrasSource]]</textarea>
-                                </label>
-                                <div class="field span-3">
-                                    <span class="field-label">Флаги</span>
-                                    <div class="flags">
-                                        <label class="flag">
-                                            <input type="checkbox" checked$="[[item.notify]]" data-item-id$="[[item._id]]" data-field="notify" on-change="[[onCheckboxChange]]">
-                                            <span>notify</span>
-                                        </label>
-                                        <label class="flag">
-                                            <input type="checkbox" checked$="[[item.reflectToAttribute]]" data-item-id$="[[item._id]]" data-field="reflectToAttribute" on-change="[[onCheckboxChange]]">
-                                            <span>reflectToAttribute</span>
-                                        </label>
-                                        <label class="flag">
-                                            <input type="checkbox" checked$="[[item.readOnly]]" data-item-id$="[[item._id]]" data-field="readOnly" on-change="[[onCheckboxChange]]">
-                                            <span>readOnly</span>
-                                        </label>
-                                    </div>
+                <div class="table-wrap" hidden$="[[!hasItems(items)]]">
+                    <pl-table id="propsTable" class="props-table" on-input="[[onTableInput]]" on-change="[[onTableChange]]" on-click="[[onTableClick]]">
+                        <template is="extra styles">
+                            <style>
+                                .prop-editor {
+                                    width: 100%;
+                                    min-width: 0;
+                                    min-height: 28px;
+                                    padding: 5px 8px;
+                                    border: 1px solid var(--pl-control-border, var(--pl-grey-base));
+                                    border-radius: calc(var(--pl-border-radius) - 2px);
+                                    background: var(--pl-surface-color, var(--pl-background-color));
+                                    box-sizing: border-box;
+                                    font: var(--pl-text-font);
+                                    color: var(--pl-text-color);
+                                }
+
+                                .prop-editor.flags {
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 10px;
+                                    min-height: 28px;
+                                    padding: 0;
+                                    border: 0;
+                                    background: transparent;
+                                }
+
+                                .prop-flag {
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 4px;
+                                    font: var(--pl-caption-font);
+                                    color: var(--pl-text-color);
+                                    white-space: nowrap;
+                                }
+
+                                .prop-flag input {
+                                    margin: 0;
+                                }
+
+                                .prop-action {
+                                    display: inline-flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    width: 28px;
+                                    height: 28px;
+                                    padding: 0;
+                                    border: 1px solid var(--pl-control-border, var(--pl-grey-base));
+                                    border-radius: calc(var(--pl-border-radius) - 2px);
+                                    background: var(--pl-surface-color, var(--pl-background-color));
+                                    color: var(--pl-negative-base, var(--pl-text-color));
+                                    cursor: pointer;
+                                }
+
+                                .prop-action:hover {
+                                    border-color: var(--pl-negative-base, var(--pl-primary-base));
+                                }
+                            </style>
+                        </template>
+                        <pl-table-column field="name" header="Имя" width="180" resizable>
+                            <template>
+                                <input class="prop-editor" value$="[[row.name]]" data-item-id$="[[row._id]]" data-field="name">
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column field="typeSource" header="Тип" width="132" resizable>
+                            <template>
+                                <select class="prop-editor" value$="[[row.typeSource]]" data-item-id$="[[row._id]]" data-field="typeSource">
+                                    <option value=""></option>
+                                    <option value="String">String</option>
+                                    <option value="Number">Number</option>
+                                    <option value="Boolean">Boolean</option>
+                                    <option value="Object">Object</option>
+                                    <option value="Array">Array</option>
+                                    <option value="Date">Date</option>
+                                    <option value="Function">Function</option>
+                                </select>
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column field="valueSource" header="Значение" width="230" resizable>
+                            <template>
+                                <input class="prop-editor" value$="[[row.valueSource]]" data-item-id$="[[row._id]]" data-field="valueSource">
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column field="observer" header="Observer" width="170" resizable>
+                            <template>
+                                <input class="prop-editor" value$="[[row.observer]]" data-item-id$="[[row._id]]" data-field="observer">
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column field="computed" header="Computed" width="170" resizable>
+                            <template>
+                                <input class="prop-editor" value$="[[row.computed]]" data-item-id$="[[row._id]]" data-field="computed">
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column field="attribute" header="Attribute" width="150" resizable>
+                            <template>
+                                <input class="prop-editor" value$="[[row.attribute]]" data-item-id$="[[row._id]]" data-field="attribute">
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column header="Флаги" width="210">
+                            <template>
+                                <div class="prop-editor flags">
+                                    <label class="prop-flag">
+                                        <input type="checkbox" checked$="[[row.notify]]" data-item-id$="[[row._id]]" data-field="notify">
+                                        <span>notify</span>
+                                    </label>
+                                    <label class="prop-flag">
+                                        <input type="checkbox" checked$="[[row.reflectToAttribute]]" data-item-id$="[[row._id]]" data-field="reflectToAttribute">
+                                        <span>reflect</span>
+                                    </label>
+                                    <label class="prop-flag">
+                                        <input type="checkbox" checked$="[[row.readOnly]]" data-item-id$="[[row._id]]" data-field="readOnly">
+                                        <span>readonly</span>
+                                    </label>
                                 </div>
-                            </div>
-                        </div>
-                    </template>
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column field="extrasSource" header="Доп. поля" width="240" resizable>
+                            <template>
+                                <input class="prop-editor" value$="[[row.extrasSource]]" data-item-id$="[[row._id]]" data-field="extrasSource">
+                            </template>
+                        </pl-table-column>
+                        <pl-table-column header="" width="52">
+                            <template>
+                                <button type="button" class="prop-action" title="Удалить свойство" data-item-id$="[[row._id]]" data-action="delete">×</button>
+                            </template>
+                        </pl-table-column>
+                    </pl-table>
                 </div>
                 <div class="empty" hidden$="[[hasItems(items)]]">Список свойств пуст. Добавьте первое свойство формы.</div>
             </div>
@@ -625,7 +628,7 @@ class PlFormPropertiesEditor extends PlElement {
                     <div class="status-text" hidden$="[[parseError]]">Изменения в списке сразу попадают в исходник формы и сохраняются общей кнопкой.</div>
                     <div class="error-text" hidden$="[[!parseError]]">[[parseError]]</div>
                 </div>
-                <pl-button variant="ghost" label="Добавить свойство" on-click="[[onAddItemClick]]"></pl-button>
+                <pl-button variant="ghost" label="Закрыть" on-click="[[close]]"></pl-button>
             </div>
         </div>
     `;
@@ -636,13 +639,20 @@ class PlFormPropertiesEditor extends PlElement {
         this._syncingText = false;
     }
 
+    connectedCallback() {
+        super.connectedCallback?.();
+        requestAnimationFrame(() => this._syncTableData());
+    }
+
     _nextId() {
         this._idSeq += 1;
         return `form-prop-${this._idSeq}`;
     }
 
     open() {
+        this._propertiesTextChanged(this.propertiesText || '{\n}');
         this.opened = true;
+        requestAnimationFrame(() => this._syncTableData());
     }
 
     close() {
@@ -651,6 +661,26 @@ class PlFormPropertiesEditor extends PlElement {
 
     hasItems(items) {
         return Array.isArray(items) && items.length > 0;
+    }
+
+    setSourceText(value) {
+        this.propertiesText = typeof value === 'string' ? value : '{\n}';
+        this._propertiesTextChanged(this.propertiesText);
+        this._syncTableData();
+    }
+
+    _getTable() {
+        return this.shadowRoot?.querySelector?.('#propsTable') || null;
+    }
+
+    _syncTableData() {
+        const table = this._getTable();
+        if (!table) return;
+        table.data = Array.isArray(this.items) ? [...this.items] : [];
+    }
+
+    _itemsChanged() {
+        requestAnimationFrame(() => this._syncTableData());
     }
 
     _propertiesTextChanged(value) {
@@ -672,11 +702,44 @@ class PlFormPropertiesEditor extends PlElement {
     }
 
     _itemIdFromEvent(event) {
-        return String(event?.currentTarget?.dataset?.itemId || event?.target?.dataset?.itemId || '').trim();
+        return String(this._eventDataset(event)?.itemId || '').trim();
     }
 
     _fieldFromEvent(event) {
-        return String(event?.currentTarget?.dataset?.field || event?.target?.dataset?.field || '').trim();
+        return String(this._eventDataset(event)?.field || '').trim();
+    }
+
+    _eventDataset(event) {
+        const path = typeof event?.composedPath === 'function' ? event.composedPath() : [];
+        for (const node of path) {
+            if (node?.dataset?.itemId || node?.dataset?.field || node?.dataset?.action) {
+                return node.dataset;
+            }
+        }
+        return event?.target?.dataset || event?.currentTarget?.dataset || {};
+    }
+
+    onTableInput(event) {
+        const field = this._fieldFromEvent(event);
+        if (!field) return;
+        this.onFieldInput(event);
+    }
+
+    onTableChange(event) {
+        const field = this._fieldFromEvent(event);
+        if (!field) return;
+        if (event?.target?.type === 'checkbox') {
+            this.onCheckboxChange(event);
+            return;
+        }
+        this.onFieldInput(event);
+    }
+
+    onTableClick(event) {
+        const dataset = this._eventDataset(event);
+        if (dataset?.action === 'delete') {
+            this.onDeleteItemClick(event);
+        }
     }
 
     onFieldInput(event) {

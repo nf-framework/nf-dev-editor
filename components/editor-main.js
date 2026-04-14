@@ -885,7 +885,14 @@ class EditorMain extends PlElement {
         return this.shadowRoot?.querySelector?.('#formPropertiesEditor') || null;
     }
 
+    _syncFormPropertiesEditor() {
+        const editor = this._getFormPropertiesEditor();
+        if (!editor) return;
+        editor.setSourceText?.(this.propertiesText || '{\n}');
+    }
+
     formProperties() {
+        this._syncFormPropertiesEditor();
         this._getFormPropertiesEditor()?.open?.();
     }
 
@@ -1094,6 +1101,7 @@ class EditorMain extends PlElement {
                 this._formStack = [];
                 this._syncParentFormState();
             }
+            this._syncFormPropertiesEditor();
             this._getFormPropertiesEditor()?.close?.();
             domSelector.root = null;
             return;
@@ -1123,6 +1131,7 @@ class EditorMain extends PlElement {
         if (resetStack || !this._selectionRoot || !this._selectionRoot.isConnected) {
             this._selectionRoot = form.root;
         }
+        this._syncFormPropertiesEditor();
         this._getFormPropertiesEditor()?.close?.();
         this._syncParentFormState();
         domSelector.root = this._selectionRoot || this.domRoot;
@@ -1438,6 +1447,7 @@ class EditorMain extends PlElement {
                 this.stylesText = data.styles;
             }
             this.propertiesText = typeof data?.properties === 'string' ? data.properties : '{\n}';
+            this._syncFormPropertiesEditor();
             if (typeof data?.scripts === 'string' && (!Array.isArray(this.scriptsDelta) || this.scriptsDelta.length === 0)) {
                 this.sourceScripts = data.scripts;
             }
