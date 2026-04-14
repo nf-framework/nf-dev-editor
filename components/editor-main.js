@@ -3,16 +3,19 @@ import { setAttrValue } from "polylib/common.js";
 import { domSelector } from "../lib/domselector.js";
 import * as polylibTools from "../lib/selectors/polylib-component.js";
 import { getDesignedTpl, getFullTemplate, getStyles } from "../lib/selectors/polylib-component.js";
-import {AddElementCommand, DelElementCommand, MoveElementCommand} from "../lib/commands.js";
+import {AddElementCommand, DelElementCommand, DuplicateElementCommand, MoveElementCommand, WrapElementCommand} from "../lib/commands.js";
 import drndr from "../lib/drndr.js";
 import "@plcmp/pl-flex-layout";
 import "@plcmp/pl-button";
+import "@plcmp/pl-icon-button";
+import "@plcmp/pl-iconset-default";
 import "/@editor/components/editor-iconset.js";
 import "./component-list.js";
 import "./tree-list.js";
 import "./props-panel.js";
 import "./scripts-editor.js";
 import "./styles-editor.js";
+import "./form-properties-editor.js?v=2";
 
 import { buildXPathCandidates, findByXpath, findByXpathWithFallback, getXPath } from "../lib/common.js";
 import {debounce} from "@plcmp/utils";
@@ -66,75 +69,196 @@ class EditorMain extends PlElement {
             sourceTplRoot: { type: Object },
             treeRoot: { type: Object },
             formClassName: { type: String, value: '' },
-            selectedPath: { type: String },
-            selectedSourcePath: { type: String, value: '' },
+            selectedPath: { type: String, observer: '_syncSelectionBreadcrumbs' },
+            selectedSourcePath: { type: String, value: '', observer: '_syncSelectionBreadcrumbs' },
             scriptsDelta: { type: Array, value: () => ([]) },
             stylesText: { type: String, value: '' },
+            propertiesText: { type: String, value: '{\n}' },
             sourceScripts: { type: String, value: '' },
             baseSignature: { type: String, value: '' },
-            hasParentForm: { type: Boolean, value: false }
+            selectionBreadcrumbs: { type: Array, value: () => [] },
+            hasParentForm: { type: Boolean, value: false },
+            leftCollapsed: { type: Boolean, value: false, observer: '_syncEditorLayout' },
+            rightCollapsed: { type: Boolean, value: false, observer: '_syncEditorLayout' },
+            canUndo: { type: Boolean, value: false },
+            canRedo: { type: Boolean, value: false }
     }
 
     static css = css`
             :host {
+                position: fixed;
+                inset: 0;
+                z-index: 9999;
                 top: 0;
                 left: 0;
                 box-sizing: border-box;
+                pointer-events: none;
             }
+
+            #top-toolbar,
+            #left-panel,
+            #right-panel {
+                pointer-events: auto;
+            }
+
+            #top-toolbar {
+                position: absolute;
+                top: 0;
+                left: var(--editor-left-width-current, var(--editor-left-width));
+                right: var(--editor-right-width-current, var(--editor-right-width));
+                height: var(--editor-toolbar-height);
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 8px 12px;
+                box-sizing: border-box;
+                border-bottom: 1px solid var(--pl-grey-light);
+                background: var(--pl-background-color);
+                transition: left 140ms ease, right 140ms ease;
+            }
+
+            .top-toolbar-title {
+                font: var(--pl-header-font);
+                color: var(--pl-header-color);
+                white-space: nowrap;
+            }
+
+            .top-toolbar-actions {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                min-width: 0;
+                flex-wrap: wrap;
+            }
+
+            .top-toolbar-actions pl-button {
+                --pl-base-size: 28px;
+            }
+
+            .top-toolbar-spacer {
+                flex: 1 1 auto;
+            }
+
             #left-panel {
                 position: absolute;
                 left: 0;
-                top: 0;
-                height: 100%;
-                width: var(--editor-left-width);
+                top: var(--editor-toolbar-height);
+                height: calc(100% - var(--editor-toolbar-height));
+                width: var(--editor-left-width-current, var(--editor-left-width));
                 box-sizing: border-box;
                 overflow: auto;
                 display: flex;
                 flex-direction: column;
                 background: var(--pl-background-color);
                 border-right: 1px solid var(--pl-grey-light);
+                transition: width 140ms ease, border-color 140ms ease;
             }
 
             #right-panel {
                 position: absolute;
                 right: 0;
-                top: 0;
-                height: 100%;
-                width: var(--editor-right-width);
+                top: var(--editor-toolbar-height);
+                height: calc(100% - var(--editor-toolbar-height));
+                width: var(--editor-right-width-current, var(--editor-right-width));
                 box-sizing: border-box;
                 overflow: auto;
                 padding: 8px;
                 border-left: 1px solid var(--pl-grey-light);
                 background: var(--white);
+                transition: width 140ms ease, padding 140ms ease, border-color 140ms ease;
             }
 
-            .left-toolbar {
+            .panel-body {
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+                min-height: 0;
+                width: 100%;
+                height: 100%;
+            }
+
+            #left-panel.collapsed .panel-body,
+            #right-panel.collapsed .panel-body {
+                display: none;
+            }
+
+            .selection-breadcrumbs {
                 position: sticky;
                 top: 0;
-                z-index: 3;
-                padding: 8px;
-                border-bottom: 1px solid var(--pl-grey-light);
+                z-index: 2;
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 0;
+                min-width: 0;
+                padding: 8px 10px;
+                margin-bottom: 8px;
+                border: 1px solid var(--pl-grey-light);
+                border-radius: var(--pl-border-radius);
+                background: var(--pl-background-color);
+                box-sizing: border-box;
+            }
+
+            .selection-breadcrumb {
+                position: relative;
+                min-width: 0;
+                flex: 0 0 auto;
+                display: inline-flex;
+                align-items: center;
+                padding: 0;
+                border: 0;
+                background: transparent;
+                color: var(--pl-grey-dark);
+                font: var(--pl-caption-font, var(--pl-text-font));
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.25;
+                white-space: nowrap;
+                cursor: default;
+            }
+
+            .selection-breadcrumb.clickable {
+                cursor: pointer;
+                transition: color 140ms ease;
+            }
+
+            .selection-breadcrumb.clickable:hover {
+                color: var(--pl-header-color);
+            }
+
+            .selection-breadcrumb:not(:first-child)::before {
+                content: '›';
+                margin: 0 8px;
+                color: var(--pl-grey-dark);
+                pointer-events: none;
+            }
+
+            .selection-breadcrumb.current {
+                color: var(--pl-header-color);
+                font-weight: 700;
+            }
+
+            .panel-toggle {
+                position: absolute;
+                top: 50%;
+                z-index: 5;
+                transform: translateY(-50%);
+                --pl-icon-button-size: 28px;
+                box-shadow: 0 0 0 1px var(--pl-grey-light);
                 background: var(--pl-background-color);
             }
 
-            .left-toolbar-title {
-                font: var(--pl-header-font);
-                color: var(--pl-header-color);
-                margin-bottom: 8px;
+            .panel-toggle.left {
+                right: 6px;
             }
 
-            .left-toolbar-actions {
-                gap: 6px;
-                flex-wrap: wrap;
-            }
-
-            .left-toolbar-actions pl-button {
-                --pl-base-size: 28px;
+            .panel-toggle.right {
+                left: 6px;
             }
 
             pl-tree-list {
-                flex: 1 1 auto;
-                min-height: 0;
+                display: block;
+                height: 100%;
             }
 
             pl-component-list {
@@ -145,25 +269,55 @@ class EditorMain extends PlElement {
         `;
 
     static template = html`
-        <div id="left-panel">
-            <div class="left-toolbar">
-                <div class="left-toolbar-title">Конструктор формы</div>
-                <pl-flex-layout class="left-toolbar-actions">
-                    <pl-button variant="ghost" on-click="[[openParentForm]]" disabled="[[!hasParentForm]]" label="Родитель"></pl-button>
-                    <pl-button variant="ghost" on-click="[[select]]" label="Выбрать"></pl-button>
-                    <pl-button variant="primary" on-click="[[save]]" label="Сохранить"></pl-button>
-                    <pl-button variant="ghost" on-click="[[scripts]]" label="JS"></pl-button>
-                    <pl-button variant="ghost" on-click="[[styles]]" label="CSS"></pl-button>
-                </pl-flex-layout>
+        <div id="top-toolbar">
+            <div class="top-toolbar-title">Конструктор формы</div>
+            <div class="top-toolbar-actions">
+                <pl-button variant="ghost" on-click="[[undo]]" disabled="[[!canUndo]]" label="Отменить"></pl-button>
+                <pl-button variant="ghost" on-click="[[redo]]" disabled="[[!canRedo]]" label="Повторить"></pl-button>
+                <pl-button variant="ghost" on-click="[[openParentForm]]" disabled="[[!hasParentForm]]" label="Родитель"></pl-button>
+                <pl-button variant="ghost" on-click="[[select]]" label="Выбрать"></pl-button>
+                <pl-button variant="ghost" on-click="[[formProperties]]" label="Форма"></pl-button>
+                <pl-button variant="ghost" on-click="[[scripts]]" label="JS"></pl-button>
+                <pl-button variant="ghost" on-click="[[styles]]" label="CSS"></pl-button>
             </div>
-            <pl-tree-list inspect="[[treeRoot]]" root-label="[[formClassName]]" selected="[[selectedSourcePath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
-            <pl-component-list></pl-component-list>
+            <div class="top-toolbar-spacer"></div>
+            <div class="top-toolbar-actions">
+                <pl-button variant="primary" on-click="[[save]]" label="Сохранить"></pl-button>
+            </div>
         </div>
-        <div id="right-panel">
-            <pl-props-panel tpl-root="[[tplRoot]]" source-tpl-root="[[sourceTplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" selected-source-path="[[selectedSourcePath]]" fwt="[[fwt]]" on-open-css-rule="[[onOpenCssRule]]"></pl-props-panel>
+        <div id="left-panel" class$="[[_panelClass(leftCollapsed)]]">
+            <pl-icon-button
+                class="panel-toggle left"
+                variant="ghost"
+                iconset="pl-default"
+                icon="[[_leftPanelIcon(leftCollapsed)]]"
+                title="[[_leftPanelTitle(leftCollapsed)]]"
+                on-click="[[toggleLeftPanel]]"></pl-icon-button>
+            <div class="panel-body">
+                <pl-tree-list inspect="[[treeRoot]]" root-label="[[formClassName]]" selected="[[selectedSourcePath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
+                <pl-component-list></pl-component-list>
+            </div>
+        </div>
+        <div id="right-panel" class$="[[_panelClass(rightCollapsed)]]">
+            <pl-icon-button
+                class="panel-toggle right"
+                variant="ghost"
+                iconset="pl-default"
+                icon="[[_rightPanelIcon(rightCollapsed)]]"
+                title="[[_rightPanelTitle(rightCollapsed)]]"
+                on-click="[[toggleRightPanel]]"></pl-icon-button>
+            <div class="panel-body">
+                <div class="selection-breadcrumbs" hidden$="[[!hasSelectionBreadcrumbs(selectionBreadcrumbs)]]" aria-label="Навигация по вложенности элемента">
+                    <template d:repeat="[[selectionBreadcrumbs]]" d:as="item">
+                        <button type="button" class$="[[selectionBreadcrumbClass(item)]]" title$="[[item.title]]" on-click="[[onSelectionBreadcrumbClick]]">[[item.label]]</button>
+                    </template>
+                </div>
+                <pl-props-panel tpl-root="[[tplRoot]]" source-tpl-root="[[sourceTplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" selected-source-path="[[selectedSourcePath]]" fwt="[[fwt]]" on-open-css-rule="[[onOpenCssRule]]"></pl-props-panel>
+            </div>
         </div>
         <pl-scripts-editor delta="{{scriptsDelta}}" source-script="[[sourceScripts]]" fwt="[[fwt]]" form="[[editForm]]" id="scriptsEditor"></pl-scripts-editor>
         <pl-styles-editor styles-text="{{stylesText}}" fwt="[[fwt]]" form="[[editForm]]" id="stylesEditor"></pl-styles-editor>
+        <pl-form-properties-editor id="formPropertiesEditor" properties-text="{{propertiesText}}"></pl-form-properties-editor>
     `;
 
     constructor() {
@@ -175,6 +329,8 @@ class EditorMain extends PlElement {
         this._sourceTemplateHost = null;
         this._sourceRequestId = 0;
         this._sourceCommandLog = [];
+        this._undoStack = [];
+        this._redoStack = [];
         this._shortcutSubscriptions = [];
         this._formStack = [];
         this._selectionRoot = null;
@@ -199,10 +355,15 @@ class EditorMain extends PlElement {
         this._attachDnDRoot(this.domScope);
 
         document.body.classList.add('editor-opened');
+        this._syncEditorLayout();
         window.plCurrentForm && this.onCurrentFormChange({ detail: window.plCurrentForm });
         this._shortcutSubscriptions.push(
             shortcut.listen(['ControlLeft+KeyS'], this.save.bind(this)),
             shortcut.listen(['MetaLeft+KeyS'], this.save.bind(this)),
+            shortcut.listen(['ControlLeft+KeyZ'], this.undo.bind(this)),
+            shortcut.listen(['MetaLeft+KeyZ'], this.undo.bind(this)),
+            shortcut.listen(['ControlLeft+ShiftLeft+KeyZ'], this.redo.bind(this)),
+            shortcut.listen(['MetaLeft+ShiftLeft+KeyZ'], this.redo.bind(this)),
             shortcut.listen(['^AltLeft'], this.select.bind(this)),
             shortcut.listen(['Delete'], this.delete.bind(this)),
             shortcut.listen(['MetaLeft+Backspace'], this.delete.bind(this))
@@ -218,6 +379,10 @@ class EditorMain extends PlElement {
         (this._dndRootRefs || []).forEach((root) => root?.removeEventListener?.('dragstart', this._onRootDragStartBound, true));
         this._dndRootRefs = [];
         document.body.classList.remove('editor-opened');
+        document.body.style.removeProperty('--editor-left-width-current');
+        document.body.style.removeProperty('--editor-right-width-current');
+        this.style.removeProperty('--editor-left-width-current');
+        this.style.removeProperty('--editor-right-width-current');
         (this._shortcutSubscriptions || []).forEach((sub) => shortcut.forget?.(sub));
         this._shortcutSubscriptions = [];
         super.disconnectedCallback?.();
@@ -229,6 +394,7 @@ class EditorMain extends PlElement {
         return domSelector.select({ type: 'polylib-component', root });
     }
     _selectedChanged() {
+        this._syncSelectionBreadcrumbs();
         if (this.selected) {
             domSelector.drawSelector(this._getDrawTarget(this.selected));
         } else {
@@ -426,6 +592,134 @@ class EditorMain extends PlElement {
         this._setActiveForm(parentForm, { resetStack: false });
     }
 
+    toggleLeftPanel() {
+        this.leftCollapsed = !this.leftCollapsed;
+    }
+
+    toggleRightPanel() {
+        this.rightCollapsed = !this.rightCollapsed;
+    }
+
+    _panelClass(collapsed) {
+        return collapsed ? 'collapsed' : '';
+    }
+
+    _leftPanelIcon(collapsed) {
+        return collapsed ? 'chevron-right' : 'chevron-left';
+    }
+
+    _rightPanelIcon(collapsed) {
+        return collapsed ? 'chevron-left' : 'chevron-right';
+    }
+
+    _leftPanelTitle(collapsed) {
+        return collapsed ? 'Показать структуру' : 'Скрыть структуру';
+    }
+
+    _rightPanelTitle(collapsed) {
+        return collapsed ? 'Показать свойства' : 'Скрыть свойства';
+    }
+
+    hasSelectionBreadcrumbs(items) {
+        return Array.isArray(items) && items.length > 0;
+    }
+
+    selectionBreadcrumbClass(item) {
+        const classes = ['selection-breadcrumb'];
+        if (item?.clickable) classes.push('clickable');
+        if (item?.current) classes.push('current');
+        return classes.join(' ');
+    }
+
+    onSelectionBreadcrumbClick(event) {
+        const crumb = event?.model?.item;
+        if (!crumb?.clickable) return;
+
+        if (crumb.root) {
+            const root = this.editForm?.root || null;
+            const runtimePath = root ? getXPath(root) : '';
+            this.selected = root;
+            this.selectedPath = runtimePath;
+            this.selectedSourcePath = '';
+            if (root) {
+                domSelector.drawSelector(this._getDrawTarget(root));
+            } else {
+                domSelector.hideSelector();
+            }
+            return;
+        }
+
+        const sourcePath = String(crumb?.sourcePath || '').trim();
+        if (!sourcePath) return;
+        const runtimeNode = this._resolveRuntimeNodeFromTemplatePath(sourcePath)
+            || this._resolveSelectionNodeByPath(sourcePath);
+        this._handleTreeSelection({
+            path: sourcePath,
+            templatePath: sourcePath,
+            runtimePath: runtimeNode ? getXPath(runtimeNode) : sourcePath,
+            target: runtimeNode instanceof Node ? runtimeNode : undefined,
+            source: 'tree'
+        });
+    }
+
+    _syncSelectionBreadcrumbs() {
+        this.selectionBreadcrumbs = this._buildSelectionBreadcrumbs();
+    }
+
+    _buildSelectionBreadcrumbs() {
+        const items = [];
+        const rootLabel = this._getSelectionRootLabel();
+        items.push({
+            label: rootLabel,
+            title: rootLabel,
+            root: true,
+            clickable: Boolean(this.selectedSourcePath),
+            current: !this.selectedSourcePath
+        });
+
+        const sourcePath = String(this.selectedSourcePath || '').trim();
+        if (!sourcePath) {
+            return items;
+        }
+
+        const parts = sourcePath.split('/').filter(Boolean);
+        const acc = [];
+        parts.forEach((part, index) => {
+            acc.push(part);
+            const parsed = this._parseXPathSegment(part);
+            const label = this._formatBreadcrumbSegmentLabel(parsed);
+            items.push({
+                label,
+                title: '/' + acc.join('/'),
+                sourcePath: '/' + acc.join('/'),
+                clickable: index < parts.length - 1,
+                current: index === parts.length - 1
+            });
+        });
+
+        return items;
+    }
+
+    _getSelectionRootLabel() {
+        const raw = String(this.formClassName || '').trim();
+        if (!raw) return 'Форма';
+        return raw.replace(/^Generated/, '') || raw;
+    }
+
+    _formatBreadcrumbSegmentLabel(parsed) {
+        if (!parsed?.name) return '';
+        return parsed.index > 0 ? `${parsed.name}[${parsed.index + 1}]` : parsed.name;
+    }
+
+    _syncEditorLayout() {
+        const leftWidth = this.leftCollapsed ? 'var(--editor-panel-rail-width)' : 'var(--editor-left-width)';
+        const rightWidth = this.rightCollapsed ? 'var(--editor-panel-rail-width)' : 'var(--editor-right-width)';
+        document.body?.style?.setProperty('--editor-left-width-current', leftWidth);
+        document.body?.style?.setProperty('--editor-right-width-current', rightWidth);
+        this.style.setProperty('--editor-left-width-current', leftWidth);
+        this.style.setProperty('--editor-right-width-current', rightWidth);
+    }
+
     onSelectComponent(e) {
         const detail = e?.detail || {};
         const rawPath = String(detail.path || '');
@@ -587,6 +881,14 @@ class EditorMain extends PlElement {
         this.$.scriptsEditor.open(this.editForm);
     }
 
+    _getFormPropertiesEditor() {
+        return this.shadowRoot?.querySelector?.('#formPropertiesEditor') || null;
+    }
+
+    formProperties() {
+        this._getFormPropertiesEditor()?.open?.();
+    }
+
     styles() {
         this.$.stylesEditor.open(this.editForm);
     }
@@ -606,21 +908,29 @@ class EditorMain extends PlElement {
         };
         command = this._prepareDropCommand(command);
         if (!command) return;
+        if (this._isUndoableCommand(command)) {
+            this._clearRedoStack();
+            this._pushUndoSnapshot();
+        }
 
         const sourceCommand = this._normalizeSourceCommand(command);
         if (sourceCommand) {
             this._sourceCommandLog.push(sourceCommand);
-            this._applyCommandToSourceTemplate(sourceCommand);
+            const sourceResult = this._applyCommandToSourceTemplate(sourceCommand);
+            if (sourceResult?.selectSourcePath) {
+                command._selectSourcePath = sourceResult.selectSourcePath;
+            }
         }
 
-        const isDomMutation = ['add-element', 'move-element', 'del-element'].includes(command?.command);
+        const isDomMutation = ['add-element', 'move-element', 'del-element', 'wrap-element', 'duplicate-element'].includes(command?.command);
         const templateContext = String(command?.sourcePath || command?.path || '').includes('/template');
+        const requiresSourceRebuild = templateContext || command?.command === 'duplicate-element';
         let cmdResult;
-        if (isDomMutation && templateContext) {
+        if (isDomMutation && requiresSourceRebuild) {
             cmdResult = {
                 select: command.command === 'move-element'
                     ? (command.element || command.path || '')
-                    : (command.path || '')
+                    : (command._selectSourcePath || command.path || '')
             };
             const rebuilt = this._rebuildRuntimeFromTemplate(true);
             if (!rebuilt) {
@@ -633,14 +943,113 @@ class EditorMain extends PlElement {
         }
         let select = cmdResult?.select;
         if (select) {
-            const runtimePath = select;
+            const runtimeNode = command?._selectSourcePath
+                ? this._resolveRuntimeNodeFromTemplatePath(command._selectSourcePath)
+                : null;
+            const runtimePath = runtimeNode ? getXPath(runtimeNode) : select;
             this.selectedPath = null;
             this.selectedPath = runtimePath;
-            this.selectedSourcePath = this._resolveSourceSelectionPath(runtimePath, '');
-            this.selected = this.editForm?.root
+            this.selectedSourcePath = command?._selectSourcePath || this._resolveSourceSelectionPath(runtimePath, '');
+            this.selected = runtimeNode || (this.editForm?.root
                 ? (findByXpath(this.editForm.root, this.selectedPath) || findByXpathWithFallback(this.editForm.root, this.selectedPath).node)
-                : null;
+                : null);
         }
+        this._notifyFormUpdate();
+        domSelector.drawSelector(this._getDrawTarget(this.selected));
+    }
+
+    _isUndoableCommand(command) {
+        return ['add-element', 'move-element', 'del-element', 'wrap-element', 'duplicate-element', 'change-property', 'change-attribute', 'change-text-node'].includes(String(command?.command || ''));
+    }
+
+    _cloneSourceCommandLog() {
+        return (this._sourceCommandLog || []).map((item) => ({ ...item }));
+    }
+
+    _captureUndoSnapshot() {
+        return {
+            template: this._getSaveTemplateText(),
+            selectedPath: this.selectedPath || '',
+            selectedSourcePath: this.selectedSourcePath || '',
+            sourceCommandLog: this._cloneSourceCommandLog()
+        };
+    }
+
+    _pushUndoSnapshot() {
+        try {
+            this._undoStack.push(this._captureUndoSnapshot());
+            if (this._undoStack.length > 100) {
+                this._undoStack.shift();
+            }
+            this.canUndo = this._undoStack.length > 0;
+        } catch (_err) {
+            // ignore snapshot issues
+        }
+    }
+
+    _pushRedoSnapshot() {
+        try {
+            this._redoStack.push(this._captureUndoSnapshot());
+            if (this._redoStack.length > 100) {
+                this._redoStack.shift();
+            }
+            this.canRedo = this._redoStack.length > 0;
+        } catch (_err) {
+            // ignore snapshot issues
+        }
+    }
+
+    _clearRedoStack() {
+        this._redoStack = [];
+        this.canRedo = false;
+    }
+
+    undo() {
+        if (!this._undoStack.length) return;
+        const snapshot = this._undoStack.pop();
+        this._pushRedoSnapshot();
+        this.canUndo = this._undoStack.length > 0;
+        this._restoreUndoSnapshot(snapshot);
+    }
+
+    redo() {
+        if (!this._redoStack.length) return;
+        const snapshot = this._redoStack.pop();
+        this._pushUndoSnapshot();
+        this.canRedo = this._redoStack.length > 0;
+        this._restoreUndoSnapshot(snapshot);
+    }
+
+    _restoreUndoSnapshot(snapshot) {
+        const html = String(snapshot?.template || '');
+        if (!html || !this.editForm) return;
+
+        const host = document.createElement('template');
+        host.innerHTML = html;
+        this._sourceTemplateHost = host;
+        this.sourceTplRoot = host;
+        this.treeRoot = host;
+        this._sourceCommandLog = Array.isArray(snapshot?.sourceCommandLog)
+            ? snapshot.sourceCommandLog.map((item) => ({ ...item }))
+            : [];
+
+        const rebuilt = this._rebuildRuntimeFromTemplate(true);
+        if (!rebuilt) return;
+
+        this.tplRoot = this.editForm?.root?.host?._ti?.tpl?.tpl || this.tplRoot;
+        this.domRoot = this.editForm?.root || this.domRoot;
+        this.treeRoot = this.sourceTplRoot;
+
+        const restoredSourcePath = String(snapshot?.selectedSourcePath || '');
+        const restoredRuntimeNode = this._resolveRuntimeNodeFromTemplatePath(restoredSourcePath)
+            || this._resolveSelectionNodeByPath(String(snapshot?.selectedPath || ''));
+        const restoredRuntimePath = restoredRuntimeNode
+            ? getXPath(restoredRuntimeNode)
+            : (String(snapshot?.selectedPath || '') || '');
+
+        this.selected = restoredRuntimeNode || null;
+        this.selectedPath = restoredRuntimePath;
+        this.selectedSourcePath = restoredSourcePath || restoredRuntimePath;
         this._notifyFormUpdate();
         domSelector.drawSelector(this._getDrawTarget(this.selected));
     }
@@ -656,6 +1065,10 @@ class EditorMain extends PlElement {
         if (resetStack) {
             this._formStack = [];
             this._syncParentFormState();
+            this._undoStack = [];
+            this._redoStack = [];
+            this.canUndo = false;
+            this.canRedo = false;
         }
 
         if (!form?.root) {
@@ -664,6 +1077,7 @@ class EditorMain extends PlElement {
             this.domRoot = null;
             this.formClassName = '';
             this.stylesText = '';
+            this.propertiesText = '{\n}';
             this.sourceScripts = '';
             this.baseSignature = '';
             this.sourceTplRoot = null;
@@ -671,11 +1085,16 @@ class EditorMain extends PlElement {
             this._sourceTemplateHost = null;
             this.selectedSourcePath = '';
             this._sourceCommandLog = [];
+            this._undoStack = [];
+            this._redoStack = [];
+            this.canUndo = false;
+            this.canRedo = false;
             if (resetStack) this._selectionRoot = null;
             if (resetStack) {
                 this._formStack = [];
                 this._syncParentFormState();
             }
+            this._getFormPropertiesEditor()?.close?.();
             domSelector.root = null;
             return;
         }
@@ -685,18 +1104,26 @@ class EditorMain extends PlElement {
         this.domRoot = form.root;
         this.formClassName = form.constructor?.name || form.localName;
         this.stylesText = getStyles(form);
+        this.propertiesText = '{\n}';
         this.sourceScripts = this.fwt.getFunctions(form).map(x => x.text).join('\n');
         this.baseSignature = '';
         this.sourceTplRoot = null;
         this.treeRoot = this.tplRoot;
         this.selectedSourcePath = '';
         this._sourceCommandLog = [];
+        if (resetStack) {
+            this._undoStack = [];
+            this._redoStack = [];
+            this.canUndo = false;
+            this.canRedo = false;
+        }
         this._attachDnDRoot(this.domRoot);
         this._setSourceTemplate(this.tplRoot?.cloneNode(true));
         this._loadBackendSource(form);
         if (resetStack || !this._selectionRoot || !this._selectionRoot.isConnected) {
             this._selectionRoot = form.root;
         }
+        this._getFormPropertiesEditor()?.close?.();
         this._syncParentFormState();
         domSelector.root = this._selectionRoot || this.domRoot;
     }
@@ -785,6 +1212,7 @@ class EditorMain extends PlElement {
             tpl: tplText,
             scriptsDelta: this.scriptsDelta,
             styles: this.stylesText,
+            properties: this.propertiesText,
             baseSignature: this.baseSignature
         });
         let res = await fetch(`/@editor/save-form/${name}`, {
@@ -848,9 +1276,11 @@ class EditorMain extends PlElement {
     }
 
     _createElementForTemplate(name) {
-        if (!this._isValidElementName(name)) return null;
+        const normalized = String(name || '').trim().toLowerCase();
+        if (!normalized) return null;
+        if (!/^[a-z][a-z0-9._-]*$/.test(normalized)) return null;
         const tpl = document.createElement('template');
-        tpl.insertAdjacentHTML('afterbegin', `<${name}></${name}>`);
+        tpl.insertAdjacentHTML('afterbegin', `<${normalized}></${normalized}>`);
         return tpl.content.firstElementChild || tpl.firstElementChild;
     }
 
@@ -955,6 +1385,34 @@ class EditorMain extends PlElement {
                 return;
             }
 
+            if (command.command === 'duplicate-element') {
+                const target = findSourceNode(command.path, command.sourcePath);
+                if (!(target instanceof Node) || !target.parentNode?.insertBefore) return;
+                const clone = target.cloneNode(true);
+                target.parentNode.insertBefore(clone, target.nextSibling);
+                return {
+                    selectSourcePath: this._getRelativeTplPath(clone)
+                };
+            }
+
+            if (command.command === 'wrap-element') {
+                const target = findSourceNode(command.path, command.sourcePath);
+                const wrapper = this._createElementForTemplate(command.element);
+                if (!(target instanceof Node) || !(wrapper instanceof Node)) return;
+
+                let parent = target.parentNode;
+                if (parent instanceof DocumentFragment && parent.host instanceof HTMLTemplateElement) {
+                    parent = parent.host.content;
+                }
+                if (!parent?.insertBefore) return;
+
+                parent.insertBefore(wrapper, target);
+                this._appendWithPosition(target, wrapper, 'in');
+                return {
+                    selectSourcePath: this._getRelativeTplPath(wrapper)
+                };
+            }
+
             if (command.command === 'del-element') {
                 const target = findSourceNode(command.path, command.sourcePath);
                 target?.remove?.();
@@ -979,6 +1437,7 @@ class EditorMain extends PlElement {
             if (typeof data?.styles === 'string') {
                 this.stylesText = data.styles;
             }
+            this.propertiesText = typeof data?.properties === 'string' ? data.properties : '{\n}';
             if (typeof data?.scripts === 'string' && (!Array.isArray(this.scriptsDelta) || this.scriptsDelta.length === 0)) {
                 this.sourceScripts = data.scripts;
             }
@@ -1673,10 +2132,13 @@ document.head.insertAdjacentHTML("beforeend",
             body {
                 --editor-right-width: 300px;
                 --editor-left-width: 300px;
+                --editor-panel-rail-width: 40px;
+                --editor-toolbar-height: 56px;
             }
             body.editor-opened {                        
-                padding-right: var(--editor-right-width);
-                padding-left: var(--editor-left-width);
+                padding-top: var(--editor-toolbar-height);
+                padding-right: var(--editor-right-width-current, var(--editor-right-width));
+                padding-left: var(--editor-left-width-current, var(--editor-left-width));
                 box-sizing: border-box;
             }
         </style>

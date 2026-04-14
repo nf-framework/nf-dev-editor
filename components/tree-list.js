@@ -2,18 +2,28 @@ import { PlElement, html, css } from "polylib";
 import '@plcmp/pl-grid';
 import '@plcmp/pl-grid/pl-grid-column';
 import '@plcmp/pl-icon-button';
+import '@plcmp/pl-input';
+import '@plcmp/pl-icon';
+import '@plcmp/pl-iconset-default';
 
 import { buildXPathCandidates, findByXpathWithFallback, getModelByDom, getXPath } from "../lib/common.js";
 import drndr from "../lib/drndr.js";
-import { AddElementCommand, MoveElementCommand } from "../lib/commands.js";
+import { AddElementCommand, DelElementCommand, DuplicateElementCommand, MoveElementCommand, WrapElementCommand } from "../lib/commands.js";
+import { getTreeNodeIconMeta } from "../lib/component-meta.js";
 
 class TreeList extends PlElement {
 	static properties = {
 			inspect: { type: Object, observer: '_inspectedChange' },
 			rootLabel: { type: String, observer: '_rootLabelChanged' },
 			data: { type: Array },
+			_fullData: { type: Array, value: () => [] },
+			search: { type: String, value: '', observer: '_applyFilter' },
 			selected: { type: String, observer: '_selectedObserver' },
-			_selectedNode: { type: Object }
+			_selectedNode: { type: Object },
+			contextMenuOpened: { type: Boolean, value: false },
+			contextMenuX: { type: Number, value: 0 },
+			contextMenuY: { type: Number, value: 0 },
+			_contextModel: { type: Object, value: null }
 		}
 
 	static css = css`
@@ -30,11 +40,20 @@ class TreeList extends PlElement {
 				top: 0;
 				z-index: 2;
 				display: flex;
-				align-items: center;
-				justify-content: space-between;
+				flex-direction: column;
+				align-items: stretch;
+				justify-content: flex-start;
+				gap: 8px;
 				padding: 6px 8px;
 				border-bottom: 1px solid var(--pl-grey-light);
 				background: var(--pl-background-color);
+			}
+
+			.tree-toolbar-head {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 8px;
 			}
 
 			.tree-toolbar-title {
@@ -49,10 +68,15 @@ class TreeList extends PlElement {
 			.tree-cell {
 				display: flex;
 				align-items: center;
-				justify-content: space-between;
+				justify-content: flex-start;
 				gap: 6px;
 				min-width: 0;
 				width: 100%;
+			}
+
+			.tree-icon {
+				flex: 0 0 auto;
+				color: var(--pl-grey-darkest);
 			}
 
 			.tree-name {
@@ -62,29 +86,120 @@ class TreeList extends PlElement {
 				text-overflow: ellipsis;
 				white-space: nowrap;
 			}
+
+			.empty {
+				padding: 12px 8px;
+				font: var(--pl-text-font);
+				color: var(--pl-grey-darkest);
+			}
+
+			.context-menu {
+				position: fixed;
+				z-index: 10001;
+				min-width: 220px;
+				padding: 6px;
+				border: 1px solid var(--pl-grey-light);
+				border-radius: var(--pl-border-radius);
+				background: var(--pl-background-color);
+				box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+			}
+
+			.context-menu-group + .context-menu-group {
+				margin-top: 6px;
+				padding-top: 6px;
+				border-top: 1px solid var(--pl-grey-light);
+			}
+
+			.context-menu-title {
+				padding: 4px 8px;
+				font: var(--pl-caption-font);
+				color: var(--pl-grey-dark);
+				text-transform: uppercase;
+				letter-spacing: .02em;
+			}
+
+			.context-menu-button {
+				display: flex;
+				width: 100%;
+				align-items: center;
+				justify-content: space-between;
+				gap: 8px;
+				min-height: 28px;
+				padding: 6px 8px;
+				border: 0;
+				border-radius: var(--pl-border-radius);
+				background: transparent;
+				font: var(--pl-text-font);
+				color: var(--pl-header-color);
+				text-align: left;
+				cursor: pointer;
+			}
+
+			.context-menu-button:hover:not([disabled]) {
+				background: var(--pl-grey-lightest);
+			}
+
+			.context-menu-button[disabled] {
+				opacity: .45;
+				cursor: default;
+			}
     	`;
 
 	static template = html`
 		<div class="tree-toolbar">
-			<div class="tree-toolbar-title">Структура</div>
-			<pl-icon-button variant="ghost" size="14" iconset="pl-editor" icon="path-copy" title="Вывести путь выбранного элемента в консоль" on-click="[[onCopySelectedPathClick]]"></pl-icon-button>
+			<div class="tree-toolbar-head">
+				<div class="tree-toolbar-title">Структура</div>
+				<pl-icon-button variant="ghost" size="14" iconset="pl-editor" icon="path-copy" title="Вывести путь выбранного элемента в консоль" on-click="[[onCopySelectedPathClick]]"></pl-icon-button>
+			</div>
+			<pl-input value="{{search}}" placeholder="Поиск по структуре" stretch></pl-input>
 		</div>
+		<div class="empty" hidden$="[[!_isEmpty(data)]]">Узлы не найдены.</div>
 		<pl-grid tree data="{{data}}" selected="{{_selectedNode}}" on-row-click="[[onSelect]]" key-field="id"
-			pkey-field="parent_id">
+			pkey-field="parent_id" hidden$="[[_isEmpty(data)]]">
 			<pl-grid-column resizable sortable width="360" field="name" header="Узел">
 				<template>
 					<div class="tree-cell" draggable="true">
+						<pl-icon class="tree-icon" iconset="[[row.iconset]]" icon="[[row.icon]]" size="14"></pl-icon>
 						<span class="tree-name" title="[[row.path]]">[[row.name]]</span>
 					</div>
 				</template>
 			</pl-grid-column>
 		</pl-grid>
+		<div
+			class="context-menu"
+			hidden$="[[!contextMenuOpened]]"
+			style$="[[_contextMenuStyle(contextMenuX, contextMenuY)]]"
+			on-click="[[_onContextMenuClick]]">
+			<div class="context-menu-group">
+				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" on-click="[[onDeleteNodeClick]]">
+					<span>Удалить</span>
+				</button>
+				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" on-click="[[onDuplicateNodeClick]]">
+					<span>Duplicate</span>
+				</button>
+			</div>
+			<div class="context-menu-group">
+				<div class="context-menu-title">Обернуть в...</div>
+				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" data-wrap="pl-flex-layout" on-click="[[onWrapNodeClick]]">
+					<span>pl-flex-layout</span>
+				</button>
+				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" data-wrap="div" on-click="[[onWrapNodeClick]]">
+					<span>div</span>
+				</button>
+				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" data-wrap="template" on-click="[[onWrapNodeClick]]">
+					<span>template</span>
+				</button>
+			</div>
+		</div>
 	`;
 
 	constructor() {
 		super();
 		drndr.listen(this, this.over, this.leave, this.drop, this);
 		this._onFormUpdateBound = this.onFormUpdate.bind(this);
+		this._onContextMenuBound = this._onContextMenu.bind(this);
+		this._onWindowPointerDownBound = this._onWindowPointerDown.bind(this);
+		this._onWindowBlurBound = this.closeContextMenu.bind(this);
 		window.addEventListener('form-update', this._onFormUpdateBound);
 		if (this.inspect) this._inspectedChange(this.inspect)
 	}
@@ -93,12 +208,65 @@ class TreeList extends PlElement {
 		super.connectedCallback();
 		if (!this._onTreeDragStartBound) this._onTreeDragStartBound = this._onTreeDragStart.bind(this);
 		this.addEventListener('dragstart', this._onTreeDragStartBound, true);
+		this.addEventListener('contextmenu', this._onContextMenuBound);
+		window.addEventListener('pointerdown', this._onWindowPointerDownBound, true);
+		window.addEventListener('blur', this._onWindowBlurBound);
 	}
 
 	disconnectedCallback() {
 		window.removeEventListener('form-update', this._onFormUpdateBound);
 		this.removeEventListener('dragstart', this._onTreeDragStartBound, true);
+		this.removeEventListener('contextmenu', this._onContextMenuBound);
+		window.removeEventListener('pointerdown', this._onWindowPointerDownBound, true);
+		window.removeEventListener('blur', this._onWindowBlurBound);
 		super.disconnectedCallback();
+	}
+
+	_onContextMenu(e) {
+		e.preventDefault();
+		const model = this._resolveStrictRowModelFromEvent(e);
+		if (!model?.path) {
+			this.closeContextMenu();
+			return;
+		}
+		e.stopPropagation();
+		this._selectedNode = model;
+		this.selected = model.path;
+		this._openContextMenu(e.clientX, e.clientY, model);
+	}
+
+	_openContextMenu(x, y, model) {
+		const maxX = Math.max(8, window.innerWidth - 236);
+		const maxY = Math.max(8, window.innerHeight - 168);
+		this.contextMenuX = Math.min(Math.max(8, Number(x) || 8), maxX);
+		this.contextMenuY = Math.min(Math.max(8, Number(y) || 8), maxY);
+		this._contextModel = model || null;
+		this.contextMenuOpened = true;
+	}
+
+	closeContextMenu() {
+		this.contextMenuOpened = false;
+		this._contextModel = null;
+	}
+
+	_onWindowPointerDown(e) {
+		if (!this.contextMenuOpened) return;
+		const path = e?.composedPath?.() || [];
+		const isMenuClick = path.some((node) => node?.classList?.contains?.('context-menu'));
+		if (isMenuClick) return;
+		this.closeContextMenu();
+	}
+
+	_contextMenuStyle(x, y) {
+		return `left:${Number(x) || 0}px;top:${Number(y) || 0}px;`;
+	}
+
+	_contextActionDisabled(model) {
+		return !model?.path || !model?._pitem;
+	}
+
+	_onContextMenuClick(e) {
+		e?.stopPropagation?.();
 	}
 
 	_onTreeDragStart(e) {
@@ -153,11 +321,13 @@ class TreeList extends PlElement {
 	_inspectedChange(inspect) {
 		setTimeout(() => {
 			if (!inspect) {
+				this._fullData = [];
 				this.data = [];
 				return;
 			}
 			let data = this.fwt.buildTree(inspect, this.rootLabel);
-			this.data = data;
+			this._fullData = data.map((item) => this._decorateNode(item));
+			this._applyFilter();
 			if (this.selected) {
 				this._selectedObserver(this.selected);
 			}
@@ -168,6 +338,48 @@ class TreeList extends PlElement {
 	}
 	onFormUpdate() {
 		this._inspectedChange(this.inspect);
+	}
+
+	_applyFilter() {
+		const source = Array.isArray(this._fullData) ? this._fullData : [];
+		const query = String(this.search || '').trim().toLowerCase();
+		if (!query) {
+			this.data = [...source];
+			return;
+		}
+
+		const keep = new Set();
+		source
+			.filter((item) => this._matchesSearch(item, query))
+			.forEach((item) => {
+				let current = item;
+				while (current) {
+					keep.add(current.id);
+					current = current._pitem || null;
+				}
+			});
+
+		this.data = source.filter((item) => keep.has(item.id));
+	}
+
+	_matchesSearch(item, query) {
+		const localName = String(item?.node?.localName || '').toLowerCase();
+		const path = String(item?.path || '').toLowerCase();
+		const name = String(item?.name || '').toLowerCase();
+		return [name, localName, path].some((value) => value.includes(query));
+	}
+
+	_decorateNode(item) {
+		const iconMeta = getTreeNodeIconMeta(item?.node, item?.name);
+		return {
+			...item,
+			icon: iconMeta.icon,
+			iconset: iconMeta.iconset
+		};
+	}
+
+	_isEmpty(data) {
+		return !Array.isArray(data) || data.length === 0;
 	}
 	_selectedObserver(val) {
 		if (!val || !this.inspect || !Array.isArray(this.data) || this.data.length === 0) return;
@@ -224,6 +436,7 @@ class TreeList extends PlElement {
 	}
 
 	onSelect(item) {
+		this.closeContextMenu();
 		let model = item?.detail?.model?.row
 			|| item?.detail?.row
 			|| this._extractRowModel(item?.detail?.model)
@@ -285,6 +498,76 @@ class TreeList extends PlElement {
 			return { row: this._selectedNode };
 		}
 		return null;
+	}
+
+	_resolveStrictRowModelFromEvent(e) {
+		const path = e?.composedPath?.() || [];
+		for (const node of path) {
+			if (!node || typeof node !== 'object') continue;
+			const isRow = node?.classList?.contains?.('row');
+			const isCell = node?.classList?.contains?.('cell');
+			const isTreeCell = node?.classList?.contains?.('tree-cell');
+			if (!isRow && !isCell && !isTreeCell) continue;
+			const model = this._extractRowModel(getModelByDom(node));
+			if (model?.path) return model;
+		}
+
+		const firstElement = path.find((node) => node?.closest);
+		if (firstElement?.closest) {
+			const rowEl = firstElement.closest('.row');
+			const rowModel = this._extractRowModel(getModelByDom(rowEl));
+			if (rowModel?.path) return rowModel;
+			const cellEl = firstElement.closest('.cell');
+			const cellModel = this._extractRowModel(getModelByDom(cellEl));
+			if (cellModel?.path) return cellModel;
+		}
+
+		return null;
+	}
+
+	onDeleteNodeClick(e) {
+		e?.preventDefault?.();
+		e?.stopPropagation?.();
+		const model = this._contextModel;
+		if (this._contextActionDisabled(model)) return;
+		this.closeContextMenu();
+		dispatchEvent(new CustomEvent('command', {
+			detail: new DelElementCommand({
+				path: model.path,
+				sourcePath: model.path
+			})
+		}));
+	}
+
+	onDuplicateNodeClick(e) {
+		e?.preventDefault?.();
+		e?.stopPropagation?.();
+		const model = this._contextModel;
+		if (this._contextActionDisabled(model)) return;
+		this.closeContextMenu();
+		dispatchEvent(new CustomEvent('command', {
+			detail: new DuplicateElementCommand({
+				path: model.path,
+				sourcePath: model.path
+			})
+		}));
+	}
+
+	onWrapNodeClick(e) {
+		e?.preventDefault?.();
+		e?.stopPropagation?.();
+		const model = this._contextModel;
+		if (this._contextActionDisabled(model)) return;
+		const wrapper = String(e?.currentTarget?.dataset?.wrap || '').trim();
+		if (!wrapper) return;
+		this.closeContextMenu();
+		dispatchEvent(new CustomEvent('command', {
+			detail: new WrapElementCommand({
+				path: model.path,
+				sourcePath: model.path,
+				element: wrapper
+			})
+		}));
 	}
 
 	_extractRowModel(model) {

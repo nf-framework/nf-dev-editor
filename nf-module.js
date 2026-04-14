@@ -33,6 +33,164 @@ function escapeTemplateLiteral(source = '') {
         .replace(/\$\{/g, '\\${');
 }
 
+function findMatchingBrace(source, startIndex, openChar = '{', closeChar = '}') {
+    let depth = 0;
+    let quote = '';
+    let escaped = false;
+    let lineComment = false;
+    let blockComment = false;
+
+    for (let i = startIndex; i < source.length; i++) {
+        const char = source[i];
+        const next = source[i + 1];
+
+        if (lineComment) {
+            if (char === '\n') lineComment = false;
+            continue;
+        }
+        if (blockComment) {
+            if (char === '*' && next === '/') {
+                blockComment = false;
+                i++;
+            }
+            continue;
+        }
+        if (quote) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (char === '\\') {
+                escaped = true;
+                continue;
+            }
+            if (char === quote) {
+                quote = '';
+            }
+            continue;
+        }
+        if (char === '/' && next === '/') {
+            lineComment = true;
+            i++;
+            continue;
+        }
+        if (char === '/' && next === '*') {
+            blockComment = true;
+            i++;
+            continue;
+        }
+        if (char === "'" || char === '"' || char === '`') {
+            quote = char;
+            continue;
+        }
+        if (char === openChar) {
+            depth++;
+            continue;
+        }
+        if (char === closeChar) {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+
+    return -1;
+}
+
+function getLineIndent(content, index) {
+    const lineStart = content.lastIndexOf('\n', index) + 1;
+    const prefix = content.slice(lineStart, index);
+    const match = prefix.match(/^\s*/);
+    return match?.[0] || '';
+}
+
+function normalizePropertiesSource(value) {
+    const text = String(value || '').trim();
+    if (!text) return '{\n}';
+    return text.startsWith('{') ? text : '{\n}';
+}
+
+function findStaticPropertiesBlock(content) {
+    const assignmentMatch = /static\s+properties\s*=\s*/m.exec(content);
+    if (assignmentMatch) {
+        const start = assignmentMatch.index;
+        const valueStart = content.indexOf('{', start + assignmentMatch[0].length);
+        if (valueStart >= 0) {
+            const valueEnd = findMatchingBrace(content, valueStart);
+            if (valueEnd >= 0) {
+                let end = valueEnd + 1;
+                while (/\s/.test(content[end] || '')) end++;
+                if (content[end] === ';') end++;
+                return {
+                    type: 'assignment',
+                    start,
+                    end,
+                    valueStart,
+                    valueEnd,
+                    indent: getLineIndent(content, start)
+                };
+            }
+        }
+    }
+
+    const getterMatch = /static\s+get\s+properties\s*\(\)\s*\{/m.exec(content);
+    if (getterMatch) {
+        const start = getterMatch.index;
+        const bodyStart = content.indexOf('{', start + getterMatch[0].length - 1);
+        if (bodyStart >= 0) {
+            const bodyEnd = findMatchingBrace(content, bodyStart);
+            if (bodyEnd >= 0) {
+                const bodySource = content.slice(bodyStart + 1, bodyEnd);
+                const returnMatch = /return\b/m.exec(bodySource);
+                if (returnMatch) {
+                    const returnIndex = bodyStart + 1 + returnMatch.index + returnMatch[0].length;
+                    const valueStart = content.indexOf('{', returnIndex);
+                    if (valueStart >= 0 && valueStart < bodyEnd) {
+                        const valueEnd = findMatchingBrace(content, valueStart);
+                        if (valueEnd >= 0 && valueEnd <= bodyEnd) {
+                            return {
+                                type: 'getter',
+                                start,
+                                end: bodyEnd + 1,
+                                valueStart,
+                                valueEnd,
+                                indent: getLineIndent(content, start)
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+function extractStaticPropertiesBlock(content) {
+    const block = findStaticPropertiesBlock(content);
+    if (!block) return '{\n}';
+    return content.slice(block.valueStart, block.valueEnd + 1);
+}
+
+function replaceStaticPropertiesBlock(content, value) {
+    if (typeof value !== 'string') return content;
+
+    const normalized = normalizePropertiesSource(value);
+    const block = findStaticPropertiesBlock(content);
+    if (block?.type === 'assignment') {
+        return `${content.slice(0, block.start)}static properties = ${normalized};${content.slice(block.end)}`;
+    }
+    if (block?.type === 'getter') {
+        const innerIndent = `${block.indent}    `;
+        const replacement = `static get properties() {\n${innerIndent}return ${normalized};\n${block.indent}}`;
+        return `${content.slice(0, block.start)}${replacement}${content.slice(block.end)}`;
+    }
+
+    const matches = content.match(frmBodyRegexp);
+    if (!matches?.groups?.body) return content;
+    const updatedBody = matches.groups.body.replace(/^\{/, `{\n    static properties = ${normalized};\n`);
+    return content.replace(matches.groups.body, updatedBody);
+}
+
 function extractStaticTaggedBlock(content, { property, tag }) {
     const staticPropPattern = new RegExp(`static\\s+${property}\\s*=\\s*${tag}\\s*\`([\\s\\S]*?)\``, 'm');
     let match = content.match(staticPropPattern);
@@ -194,6 +352,7 @@ async function init() {
             source: content,
             template: extractStaticTaggedBlock(content, { property: 'template', tag: 'html' }),
             styles: extractStaticTaggedBlock(content, { property: 'css', tag: 'css' }),
+            properties: extractStaticPropertiesBlock(content),
             scripts: extractScripts(content)
         });
         context.end();
@@ -221,6 +380,7 @@ async function init() {
         // replace template + css blocks first so visual changes always persist
         content = replaceStaticTaggedBlock(content, { property: 'template', tag: 'html', value: context.body.tpl });
         content = replaceStaticTaggedBlock(content, { property: 'css', tag: 'css', value: context.body.styles });
+        content = replaceStaticPropertiesBlock(content, context.body.properties);
 
         const scriptsDelta = Array.isArray(context.body.scriptsDelta) ? context.body.scriptsDelta : [];
         let scriptsWarning = '';

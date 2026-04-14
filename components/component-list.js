@@ -1,63 +1,22 @@
 import { PlElement, html, css } from "polylib";
+import "@plcmp/pl-input";
+import "@plcmp/pl-icon";
+import "@plcmp/pl-iconset-default";
+import "/@editor/components/editor-iconset.js";
 
-const COMPONENT_GROUPS = Object.freeze([
-    {
-        title: 'Поля ввода',
-        items: [
-            { cmp: 'pl-input', label: 'pl-input' },
-            { cmp: 'pl-input-mask', label: 'pl-input-mask' },
-            { cmp: 'pl-combobox', label: 'pl-combobox' },
-            { cmp: 'pl-datetime', label: 'pl-datetime' },
-            { cmp: 'pl-checkbox', label: 'pl-checkbox' },
-            { cmp: 'pl-radio-group', label: 'pl-radio-group' },
-            { cmp: 'pl-radio-button', label: 'pl-radio-button' },
-            { cmp: 'pl-textarea', label: 'pl-textarea' }
-        ]
-    },
-    {
-        title: 'Кнопки',
-        items: [
-            { cmp: 'pl-button', label: 'pl-button' },
-            { cmp: 'pl-icon-button', label: 'pl-icon-button' }
-        ]
-    },
-    {
-        title: 'Лэйаут',
-        items: [
-            { cmp: 'pl-flex-layout', label: 'pl-flex-layout' },
-            { cmp: 'pl-grid', label: 'pl-grid' },
-            { cmp: 'pl-grid-column', label: 'pl-grid-column' },
-            { cmp: 'pl-tabpanel', label: 'pl-tabpanel' },
-            { cmp: 'pl-tab', label: 'pl-tab' }
-        ]
-    },
-    {
-        title: 'Данные',
-        items: [
-            { cmp: 'pl-dataset', label: 'pl-dataset' },
-            { cmp: 'pl-action', label: 'pl-action' },
-            { cmp: 'pl-data-observer', label: 'pl-data-observer' },
-            { cmp: 'pl-valid-observer', label: 'pl-valid-observer' }
-        ]
-    },
-    {
-        title: 'Прочее',
-        items: [
-            { cmp: 'pl-icon', label: 'pl-icon' },
-            { cmp: 'pl-badge', label: 'pl-badge' }
-        ]
-    }
-]);
+import { getComponentLibraryGroups } from "../lib/component-meta.js";
 
 class ComponentList extends PlElement {
     static get properties() {
         return {
+            search: { type: String, value: '', observer: '_applyFilter' },
+            _allGroups: {
+                type: Array,
+                value: () => getComponentLibraryGroups()
+            },
             groups: {
                 type: Array,
-                value: () => COMPONENT_GROUPS.map((group) => ({
-                    ...group,
-                    items: group.items.map((item) => ({ ...item }))
-                }))
+                value: () => getComponentLibraryGroups()
             }
         };
     }
@@ -93,6 +52,10 @@ class ComponentList extends PlElement {
                 color: var(--pl-grey-darkest);
             }
 
+            .search {
+                margin-top: 8px;
+            }
+
             .content {
                 overflow: auto;
                 padding: 8px;
@@ -117,7 +80,7 @@ class ComponentList extends PlElement {
             .item {
                 display: inline-flex;
                 align-items: center;
-                min-height: 26px;
+                min-height: 28px;
                 padding: 4px 8px;
                 border: 1px solid var(--pl-grey-light);
                 border-radius: var(--pl-border-radius);
@@ -126,6 +89,7 @@ class ComponentList extends PlElement {
                 color: var(--pl-grey-darkest);
                 cursor: grab;
                 user-select: none;
+                gap: 6px;
             }
 
             .item:hover {
@@ -137,6 +101,27 @@ class ComponentList extends PlElement {
             .item:active {
                 cursor: grabbing;
             }
+
+            .item-icon {
+                flex: 0 0 auto;
+                color: currentColor;
+            }
+
+            .item-label {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .empty {
+                padding: 12px 8px;
+                border: 1px dashed var(--pl-grey-light);
+                border-radius: var(--pl-border-radius);
+                background: var(--pl-background-color);
+                font: var(--pl-text-font);
+                color: var(--pl-grey-darkest);
+            }
     	`;
 	}
     static get template() {
@@ -144,20 +129,55 @@ class ComponentList extends PlElement {
             <div class="head">
                 <div class="title">Компоненты</div>
                 <div class="subtitle">Перетащите компонент на форму</div>
+                <div class="search">
+                    <pl-input value="{{search}}" placeholder="Поиск по компонентам" stretch></pl-input>
+                </div>
             </div>
             <div class="content">
+                <div class="empty" hidden$="[[!_isEmpty(groups)]]">Компоненты не найдены.</div>
                 <template d:repeat="{{groups}}" d:as="group">
                     <div class="group">
                         <div class="group-title">[[group.title]]</div>
                         <div class="items">
                             <template d:repeat="{{group.items}}" d:as="cmpItem">
-                                <div class="item" draggable="true" cmp="[[cmpItem.cmp]]" title="Перетащить [[cmpItem.label]]" on-dragstart="[[onItemDragStart]]">[[cmpItem.label]]</div>
+                                <div class="item" draggable="true" cmp="[[cmpItem.cmp]]" title="Перетащить [[cmpItem.label]]" on-dragstart="[[onItemDragStart]]">
+                                    <pl-icon class="item-icon" iconset="[[cmpItem.iconset]]" icon="[[cmpItem.icon]]" size="14"></pl-icon>
+                                    <span class="item-label">[[cmpItem.label]]</span>
+                                </div>
                             </template>
                         </div>
                     </div>
                 </template>
             </div>
         `;
+    }
+
+    connectedCallback() {
+        super.connectedCallback?.();
+        this._applyFilter();
+    }
+
+    _applyFilter() {
+        const source = Array.isArray(this._allGroups) ? this._allGroups : [];
+        const query = String(this.search || '').trim().toLowerCase();
+        if (!query) {
+            this.groups = source.map((group) => ({
+                ...group,
+                items: group.items.map((item) => ({ ...item }))
+            }));
+            return;
+        }
+
+        this.groups = source
+            .map((group) => ({
+                ...group,
+                items: group.items.filter((item) => item.searchText.includes(query))
+            }))
+            .filter((group) => group.items.length > 0);
+    }
+
+    _isEmpty(groups) {
+        return !Array.isArray(groups) || groups.length === 0;
     }
 
     _resolveDragCmp(e) {
