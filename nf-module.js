@@ -265,6 +265,18 @@ function extractScripts(content) {
     }
 }
 
+function extractScriptContext(content) {
+    const source = String(content || '');
+    const exportIndex = source.search(/export\s+default\s+class\s+\w+\s+extends\s+/m);
+    if (exportIndex < 0) return '';
+
+    return source
+        .slice(0, exportIndex)
+        .replace(/^\s*import[\s\S]*?;\s*$/gm, '')
+        .replace(/^\s*export\s+.*$/gm, '')
+        .trim();
+}
+
 function applyScriptsDelta(content, scriptsDelta, formName) {
     const matches = content.match(frmBodyRegexp);
     if (!matches?.groups?.body) {
@@ -353,7 +365,8 @@ async function init() {
             template: extractStaticTaggedBlock(content, { property: 'template', tag: 'html' }),
             styles: extractStaticTaggedBlock(content, { property: 'css', tag: 'css' }),
             properties: extractStaticPropertiesBlock(content),
-            scripts: extractScripts(content)
+            scripts: extractScripts(content),
+            scriptContext: extractScriptContext(content)
         });
         context.end();
     });

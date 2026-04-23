@@ -66,25 +66,34 @@ class TreeList extends PlElement {
 			}
 
 			.tree-cell {
-				display: flex;
+				display: inline-flex;
 				align-items: center;
 				justify-content: flex-start;
 				gap: 6px;
 				min-width: 0;
 				width: 100%;
+				line-height: 1.2;
 			}
 
 			.tree-icon {
-				flex: 0 0 auto;
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				flex: 0 0 14px;
+				width: 14px;
+				height: 14px;
 				color: var(--pl-grey-darkest);
 			}
 
 			.tree-name {
-				flex: 1;
+				display: inline-block;
+				flex: 1 1 auto;
 				min-width: 0;
 				overflow: hidden;
 				text-overflow: ellipsis;
 				white-space: nowrap;
+				font: var(--pl-text-font);
+				color: var(--pl-header-color);
 			}
 
 			.empty {
@@ -154,13 +163,13 @@ class TreeList extends PlElement {
 			<pl-input value="{{search}}" placeholder="Поиск по структуре" stretch></pl-input>
 		</div>
 		<div class="empty" hidden$="[[!_isEmpty(data)]]">Узлы не найдены.</div>
-		<pl-grid tree data="{{data}}" selected="{{_selectedNode}}" on-row-click="[[onSelect]]" key-field="id"
+			<pl-grid tree data="{{data}}" selected="{{_selectedNode}}" on-row-click="[[onSelect]]" key-field="id"
 			pkey-field="parent_id" hidden$="[[_isEmpty(data)]]">
 			<pl-grid-column resizable sortable width="360" field="name" header="Узел">
 				<template>
 					<div class="tree-cell" draggable="true">
 						<pl-icon class="tree-icon" iconset="[[row.iconset]]" icon="[[row.icon]]" size="14"></pl-icon>
-						<span class="tree-name" title="[[row.path]]">[[row.name]]</span>
+						<span class="tree-name" title="[[row.path]]">[[row.treeTitle]]</span>
 					</div>
 				</template>
 			</pl-grid-column>
@@ -171,6 +180,9 @@ class TreeList extends PlElement {
 			style$="[[_contextMenuStyle(contextMenuX, contextMenuY)]]"
 			on-click="[[_onContextMenuClick]]">
 			<div class="context-menu-group">
+				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" on-click="[[onInsertNodeClick]]">
+					<span>Добавить внутрь</span>
+				</button>
 				<button class="context-menu-button" disabled$="[[_contextActionDisabled(_contextModel)]]" on-click="[[onDeleteNodeClick]]">
 					<span>Удалить</span>
 				</button>
@@ -237,7 +249,7 @@ class TreeList extends PlElement {
 
 	_openContextMenu(x, y, model) {
 		const maxX = Math.max(8, window.innerWidth - 236);
-		const maxY = Math.max(8, window.innerHeight - 168);
+		const maxY = Math.max(8, window.innerHeight - 204);
 		this.contextMenuX = Math.min(Math.max(8, Number(x) || 8), maxX);
 		this.contextMenuY = Math.min(Math.max(8, Number(y) || 8), maxY);
 		this._contextModel = model || null;
@@ -366,16 +378,193 @@ class TreeList extends PlElement {
 		const localName = String(item?.node?.localName || '').toLowerCase();
 		const path = String(item?.path || '').toLowerCase();
 		const name = String(item?.name || '').toLowerCase();
-		return [name, localName, path].some((value) => value.includes(query));
+		const displayName = String(item?.displayName || '').toLowerCase();
+		const technicalName = String(item?.technicalName || '').toLowerCase();
+		return [name, displayName, technicalName, localName, path].some((value) => value.includes(query));
 	}
 
 	_decorateNode(item) {
 		const iconMeta = getTreeNodeIconMeta(item?.node, item?.name);
+		const displayMeta = this._resolveNodeDisplayMeta(item);
 		return {
 			...item,
 			icon: iconMeta.icon,
-			iconset: iconMeta.iconset
+			iconset: iconMeta.iconset,
+			displayName: displayMeta.displayName,
+			technicalName: displayMeta.technicalName,
+			treeTitle: this._composeTreeTitle(displayMeta.technicalName, displayMeta.displayName)
 		};
+	}
+
+	_composeTreeTitle(technicalName, displayName) {
+		const technical = String(technicalName || '').trim();
+		const semantic = String(displayName || '').trim();
+		if (!technical) return semantic;
+		if (!semantic || semantic === technical) return technical;
+		return `${technical} · ${semantic}`;
+	}
+
+	_resolveNodeDisplayMeta(item) {
+		const composite = String(item?.name || '').trim();
+		const pair = composite.split('·').map((part) => String(part || '').trim()).filter(Boolean);
+		if (pair.length === 2) {
+			return {
+				displayName: pair[1],
+				technicalName: pair[0] !== pair[1] ? pair[0] : ''
+			};
+		}
+
+		const technicalName = this._resolveTechnicalNodeName(item);
+		const semanticName = this._resolveSemanticNodeName(item, technicalName);
+		const displayName = semanticName || composite || technicalName || 'node';
+		return {
+			displayName,
+			technicalName: displayName !== technicalName ? technicalName : ''
+		};
+	}
+
+	_resolveTechnicalNodeName(item) {
+		const node = item?.node;
+		if (node instanceof Element) {
+			return String(node.localName || '').toLowerCase();
+		}
+		if (node instanceof DocumentFragment) {
+			return String(node.host?.localName || 'template').toLowerCase();
+		}
+		return String(item?.name || 'node').trim();
+	}
+
+	_resolveSemanticNodeName(item, technicalName) {
+		const node = item?.node;
+		if (!item?._pitem && this.rootLabel) {
+			return String(this.rootLabel || '').trim();
+		}
+		if (!(node instanceof Element)) {
+			return String(item?.name || '').trim() || technicalName;
+		}
+
+		const tag = technicalName.toLowerCase();
+		const controlLike = [
+			'pl-input',
+			'pl-input-mask',
+			'pl-combobox',
+			'pl-datetime',
+			'pl-checkbox',
+			'pl-radio-group',
+			'pl-textarea',
+			'pl-button',
+			'pl-icon-button',
+			'pl-badge'
+		].includes(tag);
+		const dataLike = [
+			'pl-action',
+			'pl-dataset',
+			'pl-data-observer',
+			'pl-valid-observer'
+		].includes(tag);
+		const layoutLike = [
+			'pl-flex-layout',
+			'pl-grid',
+			'pl-grid-column',
+			'pl-tabpanel',
+			'pl-tab',
+			'template'
+		].includes(tag);
+
+		if (controlLike) {
+			const attrValue = this._firstMeaningfulAttribute(node, [
+				'label',
+				'caption',
+				'header',
+				'title',
+				'name',
+				'field',
+				'data-field',
+				'placeholder',
+				'id'
+			]);
+			if (attrValue) return attrValue;
+
+			const ownText = this._extractOwnText(node);
+			if (ownText) return ownText;
+
+			const siblingText = this._extractNearbyText(node);
+			if (siblingText) return siblingText;
+		}
+
+		if (dataLike) {
+			const attrValue = this._firstMeaningfulAttribute(node, [
+				'name',
+				'id',
+				'field',
+				'data-field',
+				'header',
+				'title'
+			]);
+			if (attrValue) return attrValue;
+		}
+
+		if (layoutLike) {
+			const attrValue = this._firstMeaningfulAttribute(node, [
+				'header',
+				'title',
+				'caption',
+				'name',
+				'id'
+			]);
+			if (attrValue) return attrValue;
+			return technicalName;
+		}
+
+		const attrValue = this._firstMeaningfulAttribute(node, [
+			'label',
+			'caption',
+			'header',
+			'title',
+			'name',
+			'id'
+		]);
+		if (attrValue) return attrValue;
+
+		return technicalName;
+	}
+
+	_firstMeaningfulAttribute(node, names) {
+		for (const name of names || []) {
+			const value = String(node?.getAttribute?.(name) || '').trim();
+			if (value) return value;
+		}
+		return '';
+	}
+
+	_extractOwnText(node) {
+		const text = [...(node?.childNodes || [])]
+			.filter((child) => child?.nodeType === Node.TEXT_NODE)
+			.map((child) => String(child.textContent || '').trim())
+			.filter(Boolean)
+			.join(' ')
+			.trim();
+		return text.length > 60 ? '' : text;
+	}
+
+	_extractNearbyText(node) {
+		const siblings = [...(node?.parentNode?.childNodes || [])];
+		const index = siblings.indexOf(node);
+		if (index < 0) return '';
+
+		for (let i = index - 1; i >= 0; i -= 1) {
+			const sibling = siblings[i];
+			if (sibling?.nodeType !== Node.TEXT_NODE) {
+				if (sibling instanceof Element) break;
+				continue;
+			}
+			const text = String(sibling.textContent || '').replace(/\s+/g, ' ').trim();
+			if (!text) continue;
+			if (text.length > 80) return '';
+			return text.replace(/[:\s]+$/, '').trim();
+		}
+
+		return '';
 	}
 
 	_isEmpty(data) {
@@ -456,6 +645,28 @@ class TreeList extends PlElement {
 				source: 'tree'
 			}
 		}))
+	}
+
+	onInsertNodeClick(e) {
+		e?.preventDefault?.();
+		e?.stopPropagation?.();
+		const model = this._contextModel;
+		if (this._contextActionDisabled(model)) return;
+		const anchorX = this.contextMenuX;
+		const anchorY = this.contextMenuY;
+		this._selectedNode = model;
+		this.selected = model.path;
+		this.closeContextMenu();
+		this.dispatchEvent(new CustomEvent('insertComponentRequest', {
+			detail: {
+				path: model.path,
+				sourcePath: model.sourcePath || model.templatePath || model.path,
+				anchorX,
+				anchorY
+			},
+			bubbles: true,
+			composed: true
+		}));
 	}
 
 	onCopySelectedPathClick(e) {

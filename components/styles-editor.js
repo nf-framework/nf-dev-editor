@@ -1,4 +1,7 @@
-import { PlElement, html } from "polylib";
+import { PlElement, html, css } from "polylib";
+import "@plcmp/pl-button";
+import "@plcmp/pl-icon-button";
+import "@plcmp/pl-iconset-default";
 import "@plcmp/pl-drawer";
 import "@nfjs/front-pl/components/pl-codeeditor.js";
 
@@ -15,11 +18,56 @@ class PlStylesEditor extends PlElement {
     static get template() {
         return html`
              <pl-drawer header="Styles" contained size="medium" id="drawer" position="right">
-                <pl-codeeditor id="codeeditor" value="{{stylesText}}"></pl-codeeditor>
-                <pl-flex-layout slot="footer">
-                    [[errorMessage]]
+                <pl-codeeditor
+                    id="codeeditor"
+                    value="{{stylesText}}"
+                    mode="ace/mode/css"
+                    theme="ace/theme/textmate"
+                    wrap
+                    tab-size="2"
+                    show-print-margin
+                    print-margin-column="100"
+                    enable-basic-autocompletion
+                    enable-live-autocompletion
+                    enable-snippets></pl-codeeditor>
+                <pl-flex-layout slot="footer" class="footer-bar">
+                    <pl-button variant="ghost" label="Поиск" on-click="[[findInCode]]"></pl-button>
+                    <pl-button variant="ghost" label="Заменить" on-click="[[replaceInCode]]"></pl-button>
+                    <pl-button variant="ghost" label="Строка" on-click="[[gotoLine]]"></pl-button>
+                    <pl-button variant="ghost" label="[[_wrapLabel(wrap)]]" on-click="[[toggleWrap]]"></pl-button>
+                    <span class="footer-error">[[errorMessage]]</span>
                 </pl-flex-layout>
             </pl-drawer>
+        `;
+    }
+
+    static get css() {
+        return css`
+            :host {
+                position: fixed;
+                inset: 0;
+                z-index: 12;
+                pointer-events: none;
+            }
+
+            pl-drawer {
+                pointer-events: auto;
+            }
+
+            .footer-bar {
+                width: 100%;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .footer-error {
+                margin-left: auto;
+                color: var(--pl-danger-color, #c84b31);
+                font: var(--pl-caption-font, var(--pl-text-font));
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
         `;
     }
 
@@ -30,6 +78,7 @@ class PlStylesEditor extends PlElement {
         this._searchMarkerId = null;
         this._searchMarkerTimer = 0;
         this._searchMarkerStyleReady = false;
+        this.wrap = true;
     }
 
     disconnectedCallback() {
@@ -40,6 +89,27 @@ class PlStylesEditor extends PlElement {
 
     open() {
         this.$.drawer.opened = !this.$.drawer.opened;
+    }
+
+    findInCode() {
+        this.$.codeeditor?.find();
+    }
+
+    replaceInCode() {
+        this.$.codeeditor?.replace();
+    }
+
+    gotoLine() {
+        this.$.codeeditor?.gotoLineDialog();
+    }
+
+    toggleWrap() {
+        this.wrap = !this.wrap;
+        if (this.$.codeeditor) this.$.codeeditor.wrap = this.wrap;
+    }
+
+    _wrapLabel(wrap) {
+        return wrap ? 'Без переноса' : 'Перенос';
     }
 
     openForClassToken(classToken, form) {

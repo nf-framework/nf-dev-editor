@@ -637,6 +637,7 @@ class PlFormPropertiesEditor extends PlElement {
         super();
         this._idSeq = 0;
         this._syncingText = false;
+        this._pendingFocusProperty = '';
     }
 
     connectedCallback() {
@@ -649,10 +650,14 @@ class PlFormPropertiesEditor extends PlElement {
         return `form-prop-${this._idSeq}`;
     }
 
-    open() {
+    open(propertyName = '') {
         this._propertiesTextChanged(this.propertiesText || '{\n}');
+        this._pendingFocusProperty = String(propertyName || '').trim();
         this.opened = true;
-        requestAnimationFrame(() => this._syncTableData());
+        requestAnimationFrame(() => {
+            this._syncTableData();
+            this._focusPendingProperty();
+        });
     }
 
     close() {
@@ -667,6 +672,7 @@ class PlFormPropertiesEditor extends PlElement {
         this.propertiesText = typeof value === 'string' ? value : '{\n}';
         this._propertiesTextChanged(this.propertiesText);
         this._syncTableData();
+        this._focusPendingProperty();
     }
 
     _getTable() {
@@ -680,7 +686,30 @@ class PlFormPropertiesEditor extends PlElement {
     }
 
     _itemsChanged() {
-        requestAnimationFrame(() => this._syncTableData());
+        requestAnimationFrame(() => {
+            this._syncTableData();
+            this._focusPendingProperty();
+        });
+    }
+
+    _focusPendingProperty() {
+        const propertyName = String(this._pendingFocusProperty || '').trim();
+        if (!propertyName) return;
+
+        const match = (this.items || []).find((item) => String(item?.name || '').trim() === propertyName);
+        if (!match?._id) return;
+
+        const table = this._getTable();
+        const shadowRoot = table?.shadowRoot;
+        if (!shadowRoot) return;
+
+        const controls = [...shadowRoot.querySelectorAll('[data-item-id][data-field="name"]')];
+        const target = controls.find((node) => String(node?.dataset?.itemId || '').trim() === match._id);
+        if (!target) return;
+
+        this._pendingFocusProperty = '';
+        target.focus?.();
+        target.select?.();
     }
 
     _propertiesTextChanged(value) {

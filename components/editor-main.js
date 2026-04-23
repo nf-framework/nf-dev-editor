@@ -16,6 +16,7 @@ import "./props-panel.js";
 import "./scripts-editor.js";
 import "./styles-editor.js";
 import "./form-properties-editor.js?v=2";
+import "./insert-component-dialog.js";
 
 import { buildXPathCandidates, findByXpath, findByXpathWithFallback, getXPath } from "../lib/common.js";
 import {debounce} from "@plcmp/utils";
@@ -75,6 +76,7 @@ class EditorMain extends PlElement {
             stylesText: { type: String, value: '' },
             propertiesText: { type: String, value: '{\n}' },
             sourceScripts: { type: String, value: '' },
+            sourceScriptContext: { type: String, value: '' },
             baseSignature: { type: String, value: '' },
             selectionBreadcrumbs: { type: Array, value: () => [] },
             hasParentForm: { type: Boolean, value: false },
@@ -107,7 +109,8 @@ class EditorMain extends PlElement {
                 left: var(--editor-left-width-current, var(--editor-left-width));
                 right: var(--editor-right-width-current, var(--editor-right-width));
                 height: var(--editor-toolbar-height);
-                display: flex;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
                 align-items: center;
                 gap: 12px;
                 padding: 8px 12px;
@@ -117,33 +120,35 @@ class EditorMain extends PlElement {
                 transition: left 140ms ease, right 140ms ease;
             }
 
-            .top-toolbar-title {
-                font: var(--pl-header-font);
-                color: var(--pl-header-color);
-                white-space: nowrap;
-            }
-
-            .top-toolbar-actions {
+            .top-toolbar-group {
                 display: flex;
                 align-items: center;
                 gap: 6px;
                 min-width: 0;
-                flex-wrap: wrap;
+                flex-wrap: nowrap;
             }
 
-            .top-toolbar-actions pl-button {
+            .top-toolbar-group.left {
+                justify-content: flex-start;
+            }
+
+            .top-toolbar-group.center {
+                justify-content: center;
+            }
+
+            .top-toolbar-group.right {
+                justify-content: flex-end;
+            }
+
+            .top-toolbar-group pl-button {
                 --pl-base-size: 28px;
-            }
-
-            .top-toolbar-spacer {
-                flex: 1 1 auto;
             }
 
             #left-panel {
                 position: absolute;
                 left: 0;
-                top: var(--editor-toolbar-height);
-                height: calc(100% - var(--editor-toolbar-height));
+                top: 0;
+                height: 100%;
                 width: var(--editor-left-width-current, var(--editor-left-width));
                 box-sizing: border-box;
                 overflow: auto;
@@ -157,8 +162,8 @@ class EditorMain extends PlElement {
             #right-panel {
                 position: absolute;
                 right: 0;
-                top: var(--editor-toolbar-height);
-                height: calc(100% - var(--editor-toolbar-height));
+                top: 0;
+                height: 100%;
                 width: var(--editor-right-width-current, var(--editor-right-width));
                 box-sizing: border-box;
                 overflow: auto;
@@ -270,19 +275,22 @@ class EditorMain extends PlElement {
 
     static template = html`
         <div id="top-toolbar">
-            <div class="top-toolbar-title">Конструктор формы</div>
-            <div class="top-toolbar-actions">
-                <pl-button variant="ghost" on-click="[[undo]]" disabled="[[!canUndo]]" label="Отменить"></pl-button>
-                <pl-button variant="ghost" on-click="[[redo]]" disabled="[[!canRedo]]" label="Повторить"></pl-button>
-                <pl-button variant="ghost" on-click="[[openParentForm]]" disabled="[[!hasParentForm]]" label="Родитель"></pl-button>
-                <pl-button variant="ghost" on-click="[[select]]" label="Выбрать"></pl-button>
-                <pl-button variant="ghost" on-click="[[formProperties]]" label="Форма"></pl-button>
-                <pl-button variant="ghost" on-click="[[scripts]]" label="JS"></pl-button>
-                <pl-button variant="ghost" on-click="[[styles]]" label="CSS"></pl-button>
+            <div class="top-toolbar-group left">
+                <pl-button variant="ghost" on-click="[[openParentForm]]" disabled="[[!hasParentForm]]" label="Родитель" title="Открыть родительскую форму"></pl-button>
+                <pl-button variant="ghost" on-click="[[delete]]" label="Удалить" title="Удалить выбранный узел (Delete)"></pl-button>
+                <pl-button variant="ghost" on-click="[[insertComponent]]" label="Вставить" title="Вставить компонент внутрь выбранного узла (Ctrl/Cmd+I)"></pl-button>
+                <pl-button variant="ghost" on-click="[[select]]" label="Выбрать" title="Режим выбора элемента (Alt Alt)"></pl-button>
             </div>
-            <div class="top-toolbar-spacer"></div>
-            <div class="top-toolbar-actions">
-                <pl-button variant="primary" on-click="[[save]]" label="Сохранить"></pl-button>
+            <div class="top-toolbar-group center">
+                <pl-button variant="ghost" on-click="[[formProperties]]" label="Форма" title="Свойства формы"></pl-button>
+                <pl-button variant="ghost" on-click="[[scripts]]" label="JS" title="Скрипты формы"></pl-button>
+                <pl-button variant="ghost" on-click="[[styles]]" label="CSS" title="Стили формы"></pl-button>
+            </div>
+            <div class="top-toolbar-group right">
+                <pl-button variant="ghost" on-click="[[undo]]" disabled="[[!canUndo]]" label="Отменить" title="Отменить (Ctrl/Cmd+Z)"></pl-button>
+                <pl-button variant="ghost" on-click="[[redo]]" disabled="[[!canRedo]]" label="Повторить" title="Повторить (Ctrl/Cmd+Shift+Z)"></pl-button>
+                <pl-button variant="ghost" on-click="[[close]]" label="Закрыть" title="Закрыть редактор"></pl-button>
+                <pl-button variant="primary" on-click="[[save]]" label="Сохранить" title="Сохранить (Ctrl/Cmd+S)"></pl-button>
             </div>
         </div>
         <div id="left-panel" class$="[[_panelClass(leftCollapsed)]]">
@@ -294,7 +302,13 @@ class EditorMain extends PlElement {
                 title="[[_leftPanelTitle(leftCollapsed)]]"
                 on-click="[[toggleLeftPanel]]"></pl-icon-button>
             <div class="panel-body">
-                <pl-tree-list inspect="[[treeRoot]]" root-label="[[formClassName]]" selected="[[selectedSourcePath]]" fwt="[[fwt]]" on-highlight="[[onHighlight]]"></pl-tree-list>
+                <pl-tree-list
+                    inspect="[[treeRoot]]"
+                    root-label="[[formClassName]]"
+                    selected="[[selectedSourcePath]]"
+                    fwt="[[fwt]]"
+                    on-highlight="[[onHighlight]]"
+                    on-insert-component-request="[[onInsertComponentRequest]]"></pl-tree-list>
                 <pl-component-list></pl-component-list>
             </div>
         </div>
@@ -312,12 +326,22 @@ class EditorMain extends PlElement {
                         <button type="button" class$="[[selectionBreadcrumbClass(item)]]" title$="[[item.title]]" on-click="[[onSelectionBreadcrumbClick]]">[[item.label]]</button>
                     </template>
                 </div>
-                <pl-props-panel tpl-root="[[tplRoot]]" source-tpl-root="[[sourceTplRoot]]" dom-root="[[domRoot]]" selected="[[selectedPath]]" selected-source-path="[[selectedSourcePath]]" fwt="[[fwt]]" on-open-css-rule="[[onOpenCssRule]]"></pl-props-panel>
+                <pl-props-panel
+                    tpl-root="[[tplRoot]]"
+                    source-tpl-root="[[sourceTplRoot]]"
+                    dom-root="[[domRoot]]"
+                    selected="[[selectedPath]]"
+                    selected-source-path="[[selectedSourcePath]]"
+                    fwt="[[fwt]]"
+                    on-open-css-rule="[[onOpenCssRule]]"
+                    on-open-script-method="[[onOpenScriptMethod]]"
+                    on-open-form-properties="[[onOpenFormProperties]]"></pl-props-panel>
             </div>
         </div>
-        <pl-scripts-editor delta="{{scriptsDelta}}" source-script="[[sourceScripts]]" fwt="[[fwt]]" form="[[editForm]]" id="scriptsEditor"></pl-scripts-editor>
+        <pl-scripts-editor delta="{{scriptsDelta}}" source-script="[[sourceScripts]]" source-script-context="[[sourceScriptContext]]" fwt="[[fwt]]" form="[[editForm]]" id="scriptsEditor"></pl-scripts-editor>
         <pl-styles-editor styles-text="{{stylesText}}" fwt="[[fwt]]" form="[[editForm]]" id="stylesEditor"></pl-styles-editor>
         <pl-form-properties-editor id="formPropertiesEditor" properties-text="{{propertiesText}}"></pl-form-properties-editor>
+        <pl-insert-component-dialog id="insertComponentDialog" hidden on-insert-component="[[onInsertComponent]]"></pl-insert-component-dialog>
     `;
 
     constructor() {
@@ -334,10 +358,13 @@ class EditorMain extends PlElement {
         this._shortcutSubscriptions = [];
         this._formStack = [];
         this._selectionRoot = null;
+        this._insertTarget = null;
 
         this._onSelectComponentBound = this.onSelectComponent.bind(this);
         this._onCommandBound = this.onCommand.bind(this);
         this._onOpenCssRuleBound = this.onOpenCssRule.bind(this);
+        this._onOpenScriptMethodBound = this.onOpenScriptMethod.bind(this);
+        this._onOpenFormPropertiesBound = this.onOpenFormProperties.bind(this);
         this._onCurrentFormChangeBound = this.onCurrentFormChange.bind(this);
         this._onResizeBound = debounce(() => domSelector.drawSelector(this.selected), 100);
         this._onRootDragStartBound = this._onRootDragStart.bind(this);
@@ -349,6 +376,8 @@ class EditorMain extends PlElement {
         window.addEventListener('select-component', this._onSelectComponentBound);
         window.addEventListener('command', this._onCommandBound);
         window.addEventListener('nf-dev-editor-open-css-rule', this._onOpenCssRuleBound);
+        window.addEventListener('nf-dev-editor-open-script-method', this._onOpenScriptMethodBound);
+        window.addEventListener('nf-dev-editor-open-form-properties', this._onOpenFormPropertiesBound);
         window.addEventListener('form-change', this._onCurrentFormChangeBound);
         window.addEventListener('resize', this._onResizeBound);
         this._attachDnDRoot(window);
@@ -364,6 +393,8 @@ class EditorMain extends PlElement {
             shortcut.listen(['MetaLeft+KeyZ'], this.undo.bind(this)),
             shortcut.listen(['ControlLeft+ShiftLeft+KeyZ'], this.redo.bind(this)),
             shortcut.listen(['MetaLeft+ShiftLeft+KeyZ'], this.redo.bind(this)),
+            shortcut.listen(['ControlLeft+KeyI'], this.insertComponent.bind(this)),
+            shortcut.listen(['MetaLeft+KeyI'], this.insertComponent.bind(this)),
             shortcut.listen(['^AltLeft'], this.select.bind(this)),
             shortcut.listen(['Delete'], this.delete.bind(this)),
             shortcut.listen(['MetaLeft+Backspace'], this.delete.bind(this))
@@ -374,6 +405,8 @@ class EditorMain extends PlElement {
         window.removeEventListener('select-component', this._onSelectComponentBound);
         window.removeEventListener('command', this._onCommandBound);
         window.removeEventListener('nf-dev-editor-open-css-rule', this._onOpenCssRuleBound);
+        window.removeEventListener('nf-dev-editor-open-script-method', this._onOpenScriptMethodBound);
+        window.removeEventListener('nf-dev-editor-open-form-properties', this._onOpenFormPropertiesBound);
         window.removeEventListener('form-change', this._onCurrentFormChangeBound);
         window.removeEventListener('resize', this._onResizeBound);
         (this._dndRootRefs || []).forEach((root) => root?.removeEventListener?.('dragstart', this._onRootDragStartBound, true));
@@ -393,6 +426,71 @@ class EditorMain extends PlElement {
         if (!root) return;
         return domSelector.select({ type: 'polylib-component', root });
     }
+
+    insertComponent(target = null) {
+        const targetPath = String(target?.path || '').trim();
+        this._insertTarget = targetPath
+            ? {
+                path: targetPath,
+                sourcePath: String(target.sourcePath || targetPath).trim(),
+                anchorX: Number(target.anchorX) || 0,
+                anchorY: Number(target.anchorY) || 0
+            }
+            : null;
+        const anchor = this._insertTarget?.anchorX || this._insertTarget?.anchorY
+            ? { x: this._insertTarget.anchorX, y: this._insertTarget.anchorY }
+            : null;
+        this.$.insertComponentDialog?.open?.(anchor);
+    }
+
+    onInsertComponentRequest(event) {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        const detail = event?.detail || {};
+        const path = String(detail.path || '').trim();
+        if (!path) return;
+        this.insertComponent({
+            path,
+            sourcePath: String(detail.sourcePath || path).trim(),
+            anchorX: Number(detail.anchorX) || 0,
+            anchorY: Number(detail.anchorY) || 0
+        });
+    }
+
+    onInsertComponent(event) {
+        const component = String(event?.detail?.component || '').trim();
+        if (!component) return;
+
+        const explicitTarget = this._insertTarget;
+        this._insertTarget = null;
+
+        const targetNode = explicitTarget?.path
+            ? null
+            : this.selected instanceof Node
+            ? this.selected
+            : (this.editForm?.root || this.domRoot);
+
+        const path = explicitTarget?.path
+            || this.selectedPath
+            || (targetNode instanceof Node ? getXPath(targetNode) : '');
+        if (!path) return;
+
+        const sourcePath = explicitTarget?.sourcePath
+            || this.selectedSourcePath
+            || (targetNode instanceof Node ? this._resolveTemplatePathForRuntimeNode(targetNode, path) : '')
+            || this._resolveTplPath(path, '')
+            || path;
+
+        dispatchEvent(new CustomEvent('command', {
+            detail: new AddElementCommand({
+                path,
+                sourcePath,
+                position: 'in',
+                element: component
+            })
+        }));
+    }
+
     _selectedChanged() {
         this._syncSelectionBreadcrumbs();
         if (this.selected) {
@@ -891,9 +989,9 @@ class EditorMain extends PlElement {
         editor.setSourceText?.(this.propertiesText || '{\n}');
     }
 
-    formProperties() {
+    formProperties(propertyName = '') {
         this._syncFormPropertiesEditor();
-        this._getFormPropertiesEditor()?.open?.();
+        this._getFormPropertiesEditor()?.open?.(propertyName);
     }
 
     styles() {
@@ -904,6 +1002,17 @@ class EditorMain extends PlElement {
         const selector = String(event?.detail?.selector || '').trim();
         if (!selector) return;
         this.$.stylesEditor.openForSelector(selector, this.editForm);
+    }
+
+    onOpenScriptMethod(event) {
+        const methodName = String(event?.detail?.methodName || '').trim();
+        if (!methodName) return;
+        this.$.scriptsEditor.openForMethod(methodName, this.editForm);
+    }
+
+    onOpenFormProperties(event) {
+        const propertyName = String(event?.detail?.propertyName || '').trim();
+        this.formProperties(propertyName);
     }
 
     onCommand(e) {
@@ -1086,6 +1195,7 @@ class EditorMain extends PlElement {
             this.stylesText = '';
             this.propertiesText = '{\n}';
             this.sourceScripts = '';
+            this.sourceScriptContext = '';
             this.baseSignature = '';
             this.sourceTplRoot = null;
             this.treeRoot = null;
@@ -1114,6 +1224,7 @@ class EditorMain extends PlElement {
         this.stylesText = getStyles(form);
         this.propertiesText = '{\n}';
         this.sourceScripts = this.fwt.getFunctions(form).map(x => x.text).join('\n');
+        this.sourceScriptContext = '';
         this.baseSignature = '';
         this.sourceTplRoot = null;
         this.treeRoot = this.tplRoot;
@@ -1451,6 +1562,7 @@ class EditorMain extends PlElement {
             if (typeof data?.scripts === 'string' && (!Array.isArray(this.scriptsDelta) || this.scriptsDelta.length === 0)) {
                 this.sourceScripts = data.scripts;
             }
+            this.sourceScriptContext = typeof data?.scriptContext === 'string' ? data.scriptContext : '';
 
             const host = document.createElement('template');
             host.innerHTML = data?.template || '';
@@ -1463,6 +1575,7 @@ class EditorMain extends PlElement {
 
     close() {
         this.opened = false;
+        this.remove();
     }
 
     _ensurePlComponentsLoaded() {

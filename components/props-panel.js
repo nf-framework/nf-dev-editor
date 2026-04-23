@@ -48,6 +48,10 @@ class PropsPanel extends PlElement {
                 background: var(--pl-grey-lightest);
             }
 
+            :host [hidden] {
+                display: none !important;
+            }
+
             .panel-head {
                 position: sticky;
                 top: 0;
@@ -73,13 +77,20 @@ class PropsPanel extends PlElement {
 
             .panel-tabs {
                 margin-top: 8px;
-                display: flex;
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
                 gap: 6px;
-                flex-wrap: wrap;
+                align-items: stretch;
             }
 
             .tab-wrap {
                 min-width: 0;
+                display: block;
+            }
+
+            .tab-wrap pl-button {
+                width: 100%;
+                --pl-base-size: 28px;
             }
 
             .group {
@@ -149,6 +160,29 @@ class PropsPanel extends PlElement {
                 font: var(--pl-text-font);
                 color: var(--pl-grey-darkest);
                 margin-bottom: 6px;
+            }
+
+            .boolean-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+            }
+
+            .boolean-meta {
+                min-width: 0;
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                flex: 1 1 auto;
+            }
+
+            .prop-item.boolean {
+                padding: 10px 12px;
+            }
+
+            .prop-item.boolean .prop-help {
+                margin: 6px 0 0;
             }
 
             pl-input {
@@ -256,6 +290,12 @@ class PropsPanel extends PlElement {
                 align-items: center;
                 gap: 6px;
             }
+
+            .event-link,
+            .bind-link,
+            .prop-link {
+                --pl-base-size: 24px;
+            }
         `;
     }
 
@@ -287,76 +327,106 @@ class PropsPanel extends PlElement {
 
                         <div class="group-body">
                             <template d:repeat="{{item.items}}">
-                                <div class="prop-item">
-                                    <div class="prop-meta">
-                                        <div class="prop-label">[[item.label]]</div>
-                                        <div class="prop-name">[[item.name]]</div>
+                                <template d:if="[[_isEditor(item,'boolean')]]" d:restamp>
+                                    <div class="prop-item boolean">
+                                        <div class="boolean-row">
+                                            <div class="boolean-meta">
+                                                <template d:if="[[item.boundExpression]]" d:restamp>
+                                                    <pl-button
+                                                        class="prop-link"
+                                                        variant="link"
+                                                        label="[[item.label]]"
+                                                        data-value="[[item.value]]"
+                                                        on-click="[[onBindingClick]]"></pl-button>
+                                                </template>
+                                                <template d:if="[[!item.boundExpression]]" d:restamp>
+                                                    <div class="prop-label">[[item.label]]</div>
+                                                </template>
+                                                <div class="prop-name">[[item.name]]</div>
+                                            </div>
+                                            <pl-checkbox
+                                                checked="{{item.value}}"
+                                                disabled$="[[item.readonly]]"></pl-checkbox>
+                                        </div>
+                                        <div class="prop-help" hidden$="[[!item.description]]">[[item.description]]</div>
                                     </div>
-                                    <div class="prop-help" hidden$="[[!item.description]]">[[item.description]]</div>
+                                </template>
 
-                                    <template d:if="[[_isEditor(item,'text')]]" d:restamp>
-                                        <pl-input
-                                            value="{{item.value}}"
-                                            placeholder="[[item.placeholder]]"
-                                            title="[[_getTitle(item.currentValue)]]"
-                                            disabled$="[[item.readonly]]"
-                                            stretch></pl-input>
-                                    </template>
-
-                                    <template d:if="[[_isEditor(item,'number')]]" d:restamp>
-                                        <pl-input
-                                            value="{{item.value}}"
-                                            type="number"
-                                            placeholder="[[item.placeholder]]"
-                                            title="[[_getTitle(item.currentValue)]]"
-                                            disabled$="[[item.readonly]]"
-                                            stretch></pl-input>
-                                    </template>
-
-                                    <template d:if="[[_isEditor(item,'textarea')]]" d:restamp>
-                                        <pl-textarea
-                                            value="{{item.value}}"
-                                            placeholder="[[item.placeholder]]"
-                                            title="[[_getTitle(item.currentValue)]]"
-                                            disabled$="[[item.readonly]]"
-                                            hide-resizer
-                                            stretch></pl-textarea>
-                                    </template>
-
-                                    <template d:if="[[_isEditor(item,'select')]]" d:restamp>
-                                        <pl-combobox
-                                            data="[[item.options]]"
-                                            text-property="text"
-                                            value-property="value"
-                                            value="{{item.value}}"
-                                            disabled$="[[item.readonly]]"
-                                            stretch></pl-combobox>
-                                    </template>
-
-                                    <template d:if="[[_isEditor(item,'icon-group')]]" d:restamp>
-                                        <pl-radio-group
-                                            selected="{{item.value}}"
-                                            disabled$="[[item.readonly]]">
-                                            <template d:repeat="{{item.iconOptions}}" d:as="opt">
-                                                <pl-radio-button
-                                                    name="[[opt.value]]"
-                                                    label="[[opt.text]]"
-                                                    title="[[opt.title]]"
-                                                    icon="[[opt.icon]]"
-                                                    iconset="[[opt.iconset]]"
-                                                    icon-size="14">
-                                                </pl-radio-button>
+                                <template d:if="[[!_isEditor(item,'boolean')]]" d:restamp>
+                                    <div class="prop-item">
+                                        <div class="prop-meta">
+                                            <template d:if="[[item.boundExpression]]" d:restamp>
+                                                <pl-button
+                                                    class="prop-link"
+                                                    variant="link"
+                                                    label="[[item.label]]"
+                                                    data-value="[[item.value]]"
+                                                    on-click="[[onBindingClick]]"></pl-button>
                                             </template>
-                                        </pl-radio-group>
-                                    </template>
+                                            <template d:if="[[!item.boundExpression]]" d:restamp>
+                                                <div class="prop-label">[[item.label]]</div>
+                                            </template>
+                                            <div class="prop-name">[[item.name]]</div>
+                                        </div>
+                                        <div class="prop-help" hidden$="[[!item.description]]">[[item.description]]</div>
 
-                                    <template d:if="[[_isEditor(item,'boolean')]]" d:restamp>
-                                        <pl-checkbox
-                                            checked="{{item.value}}"
-                                            caption="Включено"
-                                            disabled$="[[item.readonly]]"></pl-checkbox>
-                                    </template>
-                                </div>
+                                        <template d:if="[[_isEditor(item,'text')]]" d:restamp>
+                                            <pl-input
+                                                value="{{item.value}}"
+                                                placeholder="[[item.placeholder]]"
+                                                title="[[_getTitle(item.currentValue)]]"
+                                                disabled$="[[item.readonly]]"
+                                                stretch></pl-input>
+                                        </template>
+
+                                        <template d:if="[[_isEditor(item,'number')]]" d:restamp>
+                                            <pl-input
+                                                value="{{item.value}}"
+                                                type="number"
+                                                placeholder="[[item.placeholder]]"
+                                                title="[[_getTitle(item.currentValue)]]"
+                                                disabled$="[[item.readonly]]"
+                                                stretch></pl-input>
+                                        </template>
+
+                                        <template d:if="[[_isEditor(item,'textarea')]]" d:restamp>
+                                            <pl-textarea
+                                                value="{{item.value}}"
+                                                placeholder="[[item.placeholder]]"
+                                                title="[[_getTitle(item.currentValue)]]"
+                                                disabled$="[[item.readonly]]"
+                                                hide-resizer
+                                                stretch></pl-textarea>
+                                        </template>
+
+                                        <template d:if="[[_isEditor(item,'select')]]" d:restamp>
+                                            <pl-combobox
+                                                data="[[item.options]]"
+                                                text-property="text"
+                                                value-property="value"
+                                                value="{{item.value}}"
+                                                disabled$="[[item.readonly]]"
+                                                stretch></pl-combobox>
+                                        </template>
+
+                                        <template d:if="[[_isEditor(item,'icon-group')]]" d:restamp>
+                                            <pl-radio-group
+                                                selected="{{item.value}}"
+                                                disabled$="[[item.readonly]]">
+                                                <template d:repeat="{{item.iconOptions}}" d:as="opt">
+                                                    <pl-radio-button
+                                                        name="[[opt.value]]"
+                                                        label="[[opt.text]]"
+                                                        title="[[opt.title]]"
+                                                        icon="[[opt.icon]]"
+                                                        iconset="[[opt.iconset]]"
+                                                        icon-size="14">
+                                                    </pl-radio-button>
+                                                </template>
+                                            </pl-radio-group>
+                                        </template>
+                                    </div>
+                                </template>
                             </template>
                         </div>
                     </section>
@@ -371,7 +441,17 @@ class PropsPanel extends PlElement {
                         <template d:repeat="{{bindItems}}">
                             <div class="meta-row">
                                 <div class="meta-row-head">
-                                    <div class="meta-row-name">[[item.name]]</div>
+                                    <template d:if="[[_isBindExpression(item.value)]]" d:restamp>
+                                        <pl-button
+                                            class="bind-link"
+                                            variant="link"
+                                            label="[[item.name]]"
+                                            data-value="[[item.value]]"
+                                            on-click="[[onBindingClick]]"></pl-button>
+                                    </template>
+                                    <template d:if="[[!_isBindExpression(item.value)]]" d:restamp>
+                                        <div class="meta-row-name">[[item.name]]</div>
+                                    </template>
                                     <div class="meta-row-kind">[[item.kind]]</div>
                                 </div>
                                 <pl-input
@@ -446,9 +526,15 @@ class PropsPanel extends PlElement {
                         <template d:repeat="{{eventItems}}">
                             <div class="prop-item">
                                 <div class="event-row-head">
-                                    <div class="prop-label">[[item.label]]</div>
-                                        <div class="event-row-controls">
-                                            <div class="prop-name">[[item.name]]</div>
+                                    <pl-button
+                                        class="event-link"
+                                        variant="link"
+                                        label="[[item.label]]"
+                                        data-method="[[item.methodName]]"
+                                        disabled$="[[!item.methodName]]"
+                                        on-click="[[onEventLabelClick]]"></pl-button>
+                                    <div class="event-row-controls">
+                                        <div class="prop-name">[[item.name]]</div>
                                         <pl-button class="class-token-remove" variant="link" label="×" data-event="[[item.name]]" on-click="[[onRemoveEventClick]]"></pl-button>
                                     </div>
                                 </div>
@@ -773,6 +859,56 @@ class PropsPanel extends PlElement {
         window.dispatchEvent(new CustomEvent('nf-dev-editor-open-css-rule', { detail }));
     }
 
+    onBindingClick(event) {
+        const value = String(
+            event?.currentTarget?.dataset?.value
+            || event?.currentTarget?.getAttribute?.('data-value')
+            || event?.model?.item?.value
+            || event?.detail?.item?.value
+            || ''
+        ).trim();
+        const target = this._extractBindingTarget(value);
+        if (!target?.type || !target?.name) return;
+
+        if (target.type === 'method') {
+            const detail = { methodName: target.name };
+            this.dispatchEvent(new CustomEvent('open-script-method', {
+                detail,
+                bubbles: true,
+                composed: true
+            }));
+            window.dispatchEvent(new CustomEvent('nf-dev-editor-open-script-method', { detail }));
+            return;
+        }
+
+        const detail = { propertyName: target.name };
+        this.dispatchEvent(new CustomEvent('open-form-properties', {
+            detail,
+            bubbles: true,
+            composed: true
+        }));
+        window.dispatchEvent(new CustomEvent('nf-dev-editor-open-form-properties', { detail }));
+    }
+
+    onEventLabelClick(event) {
+        const methodName = String(
+            event?.currentTarget?.dataset?.method
+            || event?.currentTarget?.getAttribute?.('data-method')
+            || event?.model?.item?.methodName
+            || event?.detail?.item?.methodName
+            || this._extractEventMethodName(event?.model?.item?.value || event?.detail?.item?.value || '')
+            || ''
+        ).trim();
+        if (!methodName) return;
+        const detail = { methodName };
+        this.dispatchEvent(new CustomEvent('open-script-method', {
+            detail,
+            bubbles: true,
+            composed: true
+        }));
+        window.dispatchEvent(new CustomEvent('nf-dev-editor-open-script-method', { detail }));
+    }
+
     onRemoveEventClick(event) {
         const attrName = String(
             event?.currentTarget?.dataset?.event
@@ -929,8 +1065,42 @@ class PropsPanel extends PlElement {
         return attrs.map((attr) => ({
             name: String(attr.name || ''),
             label: String(attr.name || '').replace(/^on-/, ''),
-            value: String(attr.value ?? '')
+            value: String(attr.value ?? ''),
+            methodName: this._extractEventMethodName(attr.value)
         }));
+    }
+
+    _extractEventMethodName(rawValue) {
+        const text = String(rawValue ?? '').trim();
+        if (!text) return '';
+        const unwrapped = text
+            .replace(/^\[\[\s*/, '')
+            .replace(/\s*\]\]$/, '')
+            .replace(/^\{\{\s*/, '')
+            .replace(/\s*\}\}$/, '')
+            .trim();
+        const match = unwrapped.match(/^([A-Za-z_$][\w$]*)/);
+        return match?.[1] || '';
+    }
+
+    _extractBindingTarget(rawValue) {
+        const text = String(rawValue ?? '').trim();
+        if (!text) return null;
+        const unwrapped = text
+            .replace(/^\[\[\s*/, '')
+            .replace(/\s*\]\]$/, '')
+            .replace(/^\{\{\s*/, '')
+            .replace(/\s*\}\}$/, '')
+            .trim();
+        if (!unwrapped) return null;
+
+        const methodMatch = unwrapped.match(/^([A-Za-z_$][\w$]*)\s*\(/);
+        if (methodMatch?.[1]) return { type: 'method', name: methodMatch[1] };
+
+        const propMatch = unwrapped.match(/^([A-Za-z_$][\w$]*)/);
+        if (propMatch?.[1]) return { type: 'property', name: propMatch[1] };
+
+        return null;
     }
 
     _getNodeBindLabel(node) {
